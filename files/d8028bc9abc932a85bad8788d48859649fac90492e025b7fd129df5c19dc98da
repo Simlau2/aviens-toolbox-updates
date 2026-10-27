@@ -1,0 +1,2186 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aviens Toolbox</title>
+<script>
+/* Start-Animation nur einmal pro Programmstart (nicht bei jedem Neuladen) */
+(function(){try{
+  /* ?intro=1 spielt sie erneut, ?intro=hold haelt sie an (zum Ansehen/Testen) */
+  if((location.search.indexOf('intro=')>=0 || !sessionStorage.getItem('av_intro')) && !matchMedia('(prefers-reduced-motion: reduce)').matches)
+    document.documentElement.classList.add('intro-on');
+}catch(e){}})();
+</script>
+<style>
+  /* =====================================================================
+     Aviens Toolbox — Frutiger-Aero-Oberflaeche
+     Himmel, Wasser, Glas und Glanz: ein Video-Hintergrund (Seedance-Loop),
+     darauf glaenzende Glasflaechen. Alle Bilder und Symbole in
+     static/ wurden mit Nano Banana erzeugt. Farbige Werkzeug-Symbole sind
+     PNGs (tool-*.png), kleine Zeichen sind PNG-Masken (ic-*.png), die per
+     CSS eingefaerbt werden.
+     ===================================================================== */
+  :root{
+    color-scheme:light;
+    --aqua:#19a9ef;                 /* Hauptfarbe: Aqua-Blau */
+    --aqua-hi:#8fe6ff;
+    --aqua-lo:#0672c9;
+    --leaf:#5cc21f;                 /* Zweitfarbe: frisches Gruen */
+    --leaf-hi:#c4f57a;
+    --leaf-lo:#2e8f0e;
+    --blue-deep:#0a6fc2;            /* Text/Zeichen auf hellem Glas */
+    --blue-soft:rgba(60,170,240,.20);
+
+    --wall:url(/static/wall-day.jpg);
+    --bg:#5db8ee;
+    --glass-a:rgba(255,255,255,.66);
+    --glass-b:rgba(255,255,255,.30);
+    --glass-strong:rgba(255,255,255,.78);
+    --glass-line:rgba(255,255,255,.85);
+    --gloss:rgba(255,255,255,.55);
+    --inset:rgba(255,255,255,.55);
+    --inset-2:rgba(20,90,150,.14);
+    --ink:#0b2d4d;
+    --ink-2:#3d5f7d;
+    --ink-3:#6d8aa3;
+    --on-wall:#ffffff;
+    --on-wall-shadow:0 1px 3px rgba(0,50,100,.55);
+    --hair:rgba(10,70,120,.18);
+    --hair-soft:rgba(10,70,120,.10);
+    --ok:#2f9a16;
+    --err:#d8325e;
+
+    --r-card:20px;
+    --r-box:14px;
+    --r-ctl:10px;
+    --blur:blur(18px) saturate(1.5);
+    --shadow:inset 0 1px 0 rgba(255,255,255,.9), 0 2px 4px rgba(0,50,100,.12), 0 16px 38px rgba(0,50,100,.25);
+    --shadow-sm:inset 0 1px 0 rgba(255,255,255,.9), 0 1px 2px rgba(0,50,100,.14), 0 5px 14px rgba(0,50,100,.16);
+    --focus:0 0 0 3px rgba(60,180,250,.5);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;
+    font-family:"Segoe UI","Frutiger","Myriad Pro","Helvetica Neue",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+    font-size:13.5px;line-height:1.45;color:var(--ink);background:var(--bg);
+    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+    overscroll-behavior:none;cursor:default;
+  }
+  /* Hintergrund: Video-Loop, darunter das Standbild als Rueckfall */
+  #bgvid{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:-1;pointer-events:none;
+    animation:fade-in 1.2s ease both}
+  @media (prefers-reduced-motion:reduce){ #bgvid{display:none} }
+  body::before{
+    content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;
+    background:var(--wall) center/cover no-repeat;
+  }
+  body,button,select,.pills,.tile,.row-act{-webkit-user-select:none;user-select:none}
+  input,textarea{-webkit-user-select:text;user-select:text}
+  ::-webkit-scrollbar{width:12px;height:12px}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.55);border-radius:9px;border:3px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.8);background-clip:content-box}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  .wrap{max-width:820px;margin:0 auto;padding:18px 20px 120px}
+
+  /* ---------- Zeichen (PNG-Masken, per currentColor eingefaerbt) ---------- */
+  .ic{
+    display:inline-block;width:1em;height:1em;flex:none;vertical-align:-.14em;
+    background-color:currentColor;
+    -webkit-mask-image:var(--ic);mask-image:var(--ic);
+    -webkit-mask-size:contain;mask-size:contain;
+    -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+    -webkit-mask-position:center;mask-position:center;
+  }
+
+  /* ---------- Glas-Grundstoff mit Glanzkante ---------- */
+  .glass,.card,.tile,.topbar,.player,.plist{
+    position:relative;
+    background:linear-gradient(180deg,var(--glass-a),var(--glass-b));
+    -webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
+    border:1px solid var(--glass-line);
+  }
+  .card::before,.tile::before,.topbar::before,.player::before{
+    content:"";position:absolute;left:1px;right:1px;top:1px;height:46%;pointer-events:none;
+    border-radius:inherit;border-bottom-left-radius:50% 22%;border-bottom-right-radius:50% 22%;
+    background:linear-gradient(180deg,var(--gloss),transparent);opacity:.75;
+  }
+  .card>*,.tile>*,.topbar>*,.player>*{position:relative}
+
+  /* ---------- Kopfzeile ---------- */
+  .topbar{display:flex;align-items:center;gap:12px;padding:10px 14px;margin-bottom:16px;
+    border-radius:var(--r-card);box-shadow:var(--shadow-sm)}
+  .topbar img.logo{width:46px;height:46px;flex:none;filter:drop-shadow(0 3px 6px rgba(0,50,100,.35))}
+  .topbar h1{margin:0;font-size:19px;font-weight:300;letter-spacing:-.01em}
+  .topbar p{margin:0;font-size:11.5px;color:var(--ink-2)}
+  .topbar .sp{flex:1}
+
+  .ghost,.backbtn{
+    display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;
+    padding:7px 14px;border-radius:999px;font-size:12.5px;font-weight:600;font-family:inherit;
+    color:var(--ink);border:1px solid var(--glass-line);
+    background:linear-gradient(180deg,var(--glass-strong) 0%,var(--glass-b) 50%,var(--glass-a) 100%);
+    -webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
+    box-shadow:var(--shadow-sm);transition:.12s;
+  }
+  .ghost:hover,.backbtn:hover{filter:brightness(1.08)}
+  .ghost:active,.backbtn:active{transform:scale(.97)}
+  .ghost .ic{font-size:14px;color:var(--blue-deep)}
+  .ghost img{width:18px;height:18px}
+  .ghost.update{color:#fff;border-color:rgba(255,255,255,.7);text-shadow:0 1px 1px rgba(20,80,0,.5);
+    background:linear-gradient(180deg,var(--leaf-hi) 0%,var(--leaf) 50%,var(--leaf-lo) 52%,var(--leaf) 100%)}
+  .ghost.update .ic{color:#fff}
+  .vers{font-size:10.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+
+  /* ---------- Karten ---------- */
+  .card{border-radius:var(--r-card);padding:18px 20px;box-shadow:var(--shadow);margin-bottom:14px}
+  .card-head{display:flex;align-items:baseline;gap:10px;margin-bottom:12px}
+  .card-head h2{margin:0;font-size:16px;font-weight:300;letter-spacing:-.01em}
+  .card-head .sp{flex:1}
+  .card-head .sub{font-size:11.5px;color:var(--ink-3)}
+
+  /* ---------- Werkzeug-Kacheln ---------- */
+  .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px}
+  @media (max-width:700px){.tiles{grid-template-columns:repeat(2,1fr)}
+    .tiles{gap:10px}.tile{padding:11px 12px;gap:10px}.tile img{width:42px;height:42px}
+    .tile .nm{font-size:13px}.tile .ds{font-size:10.5px}
+    .topbar p .vers{display:none}
+    .gen-setup{flex-wrap:wrap}}
+  .tile{
+    border-radius:18px;padding:14px;cursor:pointer;box-shadow:var(--shadow-sm);
+    display:flex;align-items:center;gap:12px;transition:.14s;
+  }
+  .tile:hover{transform:translateY(-2px);box-shadow:var(--shadow);filter:brightness(1.06)}
+  .tile:active{transform:translateY(0) scale(.985)}
+  .tile img{width:54px;height:54px;flex:none;filter:drop-shadow(0 4px 6px rgba(0,50,100,.35));transition:.18s}
+  .tile:hover img{transform:scale(1.08) rotate(-3deg)}
+  .tile .tx{min-width:0}
+  .tile .nm{font-size:14px;font-weight:600;letter-spacing:-.01em}
+  .tile .ds{font-size:11px;color:var(--ink-2);line-height:1.35;margin-top:1px}
+
+  /* ---------- Letzte Dateien ---------- */
+  .filelist{display:flex;flex-direction:column}
+  .fl{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--hair-soft);cursor:pointer}
+  .fl:first-child{border-top:0;padding-top:2px}
+  .fl:hover .nm{color:var(--blue-deep)}
+  .fl img{width:20px;height:20px;flex:none}
+  .fl .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
+  .fl .mt{font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums;flex:none}
+  .empty{font-size:12px;color:var(--ink-3);padding:10px 0 4px}
+
+  /* ---------- Werkzeug-Ansicht ---------- */
+  .toolbar{display:flex;align-items:center;gap:12px;margin:2px 0 14px}
+  .backbtn{padding:7px 14px 7px 10px}
+  .backbtn .ic{font-size:11px;color:var(--blue-deep)}
+  .tooltitle{display:flex;align-items:center;gap:9px;font-size:21px;font-weight:300;letter-spacing:-.01em;
+    color:var(--on-wall);text-shadow:var(--on-wall-shadow)}
+  .tooltitle img{width:34px;height:34px;filter:drop-shadow(0 2px 4px rgba(0,40,80,.45))}
+
+  /* ---------- Formularelemente ---------- */
+  label{display:block;font-size:11.5px;font-weight:600;color:var(--ink-2);margin:18px 0 7px}
+  .card>label:first-child,.row label:first-child{margin-top:0}
+  label .opt{font-weight:400;color:var(--ink-3)}
+  input[type=text],textarea,select{
+    width:100%;padding:9px 12px;border-radius:var(--r-ctl);font-size:13px;font-family:inherit;
+    color:var(--ink);background:var(--inset);border:1px solid var(--hair);outline:none;
+    box-shadow:inset 0 2px 4px rgba(0,50,100,.12);transition:.12s;
+  }
+  ::placeholder{color:var(--ink-3)}
+  textarea{resize:vertical;min-height:82px;line-height:1.5}
+  select{
+    -webkit-appearance:none;appearance:none;padding-right:30px;cursor:pointer;
+    background-image:linear-gradient(45deg,transparent 50%,var(--ink-2) 50%),
+                     linear-gradient(135deg,var(--ink-2) 50%,transparent 50%);
+    background-position:calc(100% - 15px) 15px,calc(100% - 11px) 15px;
+    background-size:4px 4px,4px 4px;background-repeat:no-repeat;
+  }
+  select option{color:#0b2d4d;background:#fff}
+  input:focus,textarea:focus,select:focus{border-color:var(--aqua);box-shadow:var(--focus)}
+  .row{display:flex;gap:12px}.row>div{flex:1;min-width:0}
+  .row+.row{margin-top:16px}
+
+  input[type=color]{
+    width:100%;height:38px;padding:3px;border-radius:var(--r-ctl);cursor:pointer;
+    border:1px solid var(--hair);background:var(--inset);-webkit-appearance:none;appearance:none;
+  }
+  input[type=color]::-webkit-color-swatch-wrapper{padding:0}
+  input[type=color]::-webkit-color-swatch{border-radius:7px;border:1px solid var(--hair)}
+  input[type=color].dim{opacity:.3;pointer-events:none}
+
+  /* Segmentierte Steuerung */
+  .pills{display:flex;gap:2px;padding:2px;border-radius:999px;background:var(--inset-2);
+    box-shadow:inset 0 1px 3px rgba(0,40,80,.18)}
+  .pill{
+    flex:1;display:flex;align-items:center;justify-content:center;gap:5px;
+    padding:6px 10px;border-radius:999px;cursor:pointer;
+    font-size:12.5px;font-weight:600;color:var(--ink-2);text-align:center;transition:.12s;
+  }
+  .pill:hover{color:var(--ink)}
+  .pill.active{color:#fff;text-shadow:0 1px 1px rgba(0,50,110,.55);
+    background:linear-gradient(180deg,var(--aqua-hi) 0%,var(--aqua) 50%,var(--aqua-lo) 52%,var(--aqua) 100%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 1px 3px rgba(0,60,120,.4)}
+  .pills.small .pill{padding:4px 10px;font-size:11px}
+
+  .hint{font-size:11px;color:var(--ink-3);margin-top:8px;line-height:1.5}
+  .hint b{color:var(--ink-2);font-weight:600}
+
+  /* Aktionsknopf: Aqua-Glanz */
+  button.go{
+    width:100%;margin-top:20px;padding:11px;border:1px solid rgba(255,255,255,.75);border-radius:999px;cursor:pointer;
+    font-family:inherit;font-size:14px;font-weight:600;color:#fff;text-shadow:0 1px 2px rgba(0,50,110,.6);
+    background:linear-gradient(180deg,var(--aqua-hi) 0%,var(--aqua) 48%,var(--aqua-lo) 52%,var(--aqua) 100%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 3px 6px rgba(0,60,120,.3),0 8px 20px rgba(20,150,240,.35);transition:.12s;
+    display:flex;align-items:center;justify-content:center;gap:7px;
+  }
+  button.go.leaf{text-shadow:0 1px 2px rgba(20,80,0,.6);
+    background:linear-gradient(180deg,var(--leaf-hi) 0%,var(--leaf) 48%,var(--leaf-lo) 52%,var(--leaf) 100%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 3px 6px rgba(20,80,0,.3),0 8px 20px rgba(90,190,30,.35)}
+  button.go:hover{filter:brightness(1.07)}
+  button.go:active{transform:scale(.99);filter:brightness(.95)}
+  button.go:disabled{background:var(--inset-2);border-color:var(--hair);color:var(--ink-3);text-shadow:none;box-shadow:none;cursor:not-allowed}
+  button.go .ic{font-size:15px}
+  button.go.slim{width:auto;margin-top:0;padding:8px 18px;font-size:12.5px}
+
+  /* Ablagefeld */
+  .drop{
+    border:1.5px dashed var(--hair);border-radius:var(--r-box);padding:22px 18px;text-align:center;
+    color:var(--ink-2);font-size:12.5px;font-weight:600;cursor:pointer;background:var(--inset);
+    transition:.14s;display:flex;flex-direction:column;align-items:center;gap:8px;
+  }
+  .drop img{width:40px;height:40px;filter:drop-shadow(0 3px 5px rgba(0,50,100,.3))}
+  .drop:hover{filter:brightness(1.05)}
+  .drop.hover{border-color:var(--aqua);background:var(--blue-soft);color:var(--blue-deep)}
+  .drop.small{padding:12px;flex-direction:row;justify-content:center}
+  .drop.small img{width:26px;height:26px}
+
+  /* Ergebniszeilen */
+  .results{margin-top:14px;display:flex;flex-direction:column;gap:7px}
+  .res{
+    display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:12px;font-size:12.5px;
+    background:var(--inset);border:1px solid var(--hair-soft);
+  }
+  .res>.ic{font-size:15px;color:var(--ink-3)}
+  .res.ok>.ic{color:var(--ok)}
+  .res.err{background:rgba(216,50,94,.14);border-color:rgba(216,50,94,.3);cursor:pointer}
+  .res.err>.ic{color:var(--err)}
+  .res.err:hover{background:rgba(216,50,94,.2)}
+  .res .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+  .res .name small{display:block;font-size:10.5px;color:var(--ink-3);font-weight:500;margin-top:1px}
+  .res a,.res .act{
+    flex:none;display:inline-flex;align-items:center;gap:5px;text-decoration:none;cursor:pointer;
+    padding:5px 11px;border-radius:999px;font-size:11.5px;font-weight:600;color:var(--ink);
+    background:linear-gradient(180deg,var(--glass-strong),var(--glass-b));
+    border:1px solid var(--glass-line);box-shadow:var(--shadow-sm);transition:.12s;
+  }
+  .res a:hover,.res .act:hover{color:var(--blue-deep)}
+  .res a .ic,.res .act .ic{font-size:12px;color:var(--blue-deep)}
+  .copybadge{
+    flex:none;padding:4px 9px;border-radius:999px;font-size:10.5px;font-weight:600;
+    color:#fff;background:var(--aqua);white-space:nowrap;
+    animation:pop-in .22s cubic-bezier(.2,1.4,.4,1) both;
+  }
+  .spin{width:14px;height:14px;border:2px solid var(--inset-2);border-top-color:var(--blue-deep);
+    border-radius:50%;animation:spin .7s linear infinite;flex:none}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes pop-in{from{opacity:0;transform:scale(.6)}to{opacity:1;transform:scale(1)}}
+  .hidden{display:none !important}
+  .counter{font-size:11.5px;color:var(--ink-2);font-weight:600;margin-top:12px;font-variant-numeric:tabular-nums}
+  .mono{font-family:Consolas,"SF Mono",ui-monospace,Menlo,monospace;font-size:12.5px}
+
+  /* Fortschrittsbalken (Aero-Gruen) */
+  .bar{height:12px;border-radius:999px;overflow:hidden;background:var(--inset-2);margin-top:12px;
+    border:1px solid var(--hair);box-shadow:inset 0 1px 3px rgba(0,40,80,.25)}
+  .bar>i{display:block;height:100%;width:0;border-radius:999px;transition:width .4s;
+    background:linear-gradient(180deg,var(--leaf-hi) 0%,var(--leaf) 50%,var(--leaf-lo) 52%,var(--leaf) 100%)}
+
+  /* Tanga Generator: Modell-Auswahl */
+  .models{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .model{position:relative;padding:10px 12px;border-radius:var(--r-box);cursor:pointer;overflow:hidden;
+    background:var(--inset);border:1px solid var(--hair);transition:transform .16s cubic-bezier(.2,1.6,.4,1),box-shadow .2s,border-color .15s,background .2s}
+  .model:hover{transform:translateY(-1px);background:rgba(255,255,255,.75)}
+  .model.active{border-color:var(--aqua);box-shadow:var(--focus);background:rgba(255,255,255,.85)}
+  .model .top{display:flex;align-items:center;gap:6px}
+  .model b{font-size:12.5px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .model .tag{flex:none;padding:2px 7px;border-radius:999px;font-size:9.5px;font-weight:700;letter-spacing:.03em;
+    color:#fff;text-shadow:0 1px 1px rgba(0,50,110,.5);
+    background:linear-gradient(180deg,var(--aqua-hi),var(--aqua) 50%,var(--aqua-lo) 52%,var(--aqua))}
+  .model.inst .tag{text-shadow:0 1px 1px rgba(20,80,0,.5);
+    background:linear-gradient(180deg,var(--leaf-hi),var(--leaf) 50%,var(--leaf-lo) 52%,var(--leaf))}
+  .model small{display:block;margin-top:3px;font-size:10.5px;color:var(--ink-2);line-height:1.35}
+  .model .st{display:block;margin-top:4px;font-size:10px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+  .model.inst .st{color:var(--ok);font-weight:600}
+  @media (max-width:460px){.models{grid-template-columns:1fr}}
+
+  /* Tanga Generator */
+  .gen-setup{display:flex;align-items:center;gap:14px;padding:14px;border-radius:var(--r-box);
+    background:var(--inset);border:1px solid var(--hair-soft);margin-bottom:16px}
+  .gen-setup img{width:48px;height:48px;flex:none}
+  .gen-setup .tx{flex:1;min-width:0;font-size:12px;color:var(--ink-2);line-height:1.5}
+  .gen-setup .tx b{display:block;font-size:13.5px;color:var(--ink);font-weight:600}
+  .gallery{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:14px}
+  .gallery.one{grid-template-columns:1fr}
+  .shot{position:relative;border-radius:var(--r-box);overflow:hidden;border:1px solid var(--glass-line);
+    box-shadow:var(--shadow-sm);background:var(--inset);animation:pop-in .3s cubic-bezier(.2,1.2,.4,1) both}
+  .shot img{display:block;width:100%;height:auto;cursor:zoom-in}
+  .shot .ov{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:8px;padding:18px 10px 8px;
+    background:linear-gradient(transparent,rgba(0,20,40,.7));color:#fff;font-size:11px;opacity:0;transition:.15s}
+  .shot:hover .ov{opacity:1}
+  .shot .ov .sp{flex:1}
+  .shot .ov a,.shot .ov .act{display:inline-flex;align-items:center;gap:5px;cursor:pointer;color:#fff;text-decoration:none;
+    padding:4px 10px;border-radius:999px;font-weight:600;background:rgba(255,255,255,.22);border:1px solid rgba(255,255,255,.5)}
+  #lightbox{position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;
+    background:rgba(0,15,30,.78);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);cursor:zoom-out}
+  #lightbox img{max-width:94vw;max-height:92vh;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+
+  /* QR-Vorschau */
+  .qr-prevbox{margin-top:18px;display:flex;justify-content:center}
+  .qr-prev{
+    width:200px;height:200px;border-radius:var(--r-box);display:flex;align-items:center;
+    justify-content:center;overflow:hidden;border:1px solid var(--hair);
+    background:
+      linear-gradient(45deg,var(--inset-2) 25%,transparent 25%,transparent 75%,var(--inset-2) 75%),
+      linear-gradient(45deg,var(--inset-2) 25%,transparent 25%,transparent 75%,var(--inset-2) 75%),
+      var(--glass-strong);
+    background-size:14px 14px;background-position:0 0,7px 7px;
+  }
+  .qr-prev img{width:100%;height:100%;object-fit:contain}
+  .qr-prev .ph{font-size:11.5px;color:var(--ink-3);padding:16px;text-align:center;line-height:1.5}
+
+  /* Farb-Werkzeuge */
+  .fmtlabel{
+    flex:none;width:54px;text-align:center;padding:3px 0;border-radius:999px;
+    font-size:10px;font-weight:700;letter-spacing:.03em;color:var(--blue-deep);background:var(--blue-soft);
+  }
+  #col-swatch{height:54px;border-radius:var(--r-box);margin-top:12px;border:1px solid var(--hair);
+    box-shadow:inset 0 14px 18px -8px rgba(255,255,255,.55)}
+  .ct-sample{margin-top:14px;padding:16px;border-radius:var(--r-box);border:1px solid var(--hair)}
+  .ct-sample .big{font-size:22px;font-weight:600;letter-spacing:-.02em}
+  .ct-sample .small{font-size:13px;margin-top:4px}
+  .ct-score{margin-top:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .ct-ratio{font-size:22px;font-weight:300;letter-spacing:-.02em;font-variant-numeric:tabular-nums;margin-right:4px}
+  .badge{display:inline-flex;align-items:center;gap:4px;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:600}
+  .badge .ic{font-size:11px}
+  .badge.pass{color:#1f6b0c;background:rgba(92,194,31,.25)}
+  .badge.fail{color:#8d1a3f;background:rgba(216,50,94,.2)}
+
+  /* ---------- Popup-Gadget (DVD-Saver) ---------- */
+  #popup-layer{position:fixed;inset:0;pointer-events:none;z-index:60;overflow:hidden}
+  .popup{position:absolute;pointer-events:auto;cursor:pointer;will-change:transform;
+    border-radius:16px;overflow:hidden;background:var(--glass-strong);
+    border:1px solid var(--glass-line);box-shadow:0 10px 34px rgba(0,30,60,.4);
+    animation:pop-in .28s cubic-bezier(.2,1.4,.4,1) both;transition:transform .12s}
+  .popup img{display:block;width:100%;height:100%;object-fit:cover}
+  .popup:hover{transform:scale(1.03)}
+  .popup.bye{animation:pop-out .24s ease-in forwards}
+  @keyframes pop-out{to{opacity:0;transform:scale(.3)}}
+
+  /* ---------- Fussleiste ---------- */
+  .footer{display:flex;align-items:center;gap:8px;padding:4px 2px 0}
+  .footer .sp{flex:1}
+  .footer .pills{background:rgba(255,255,255,.35);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur)}
+  .toggle{
+    display:inline-flex;align-items:center;gap:5px;cursor:pointer;padding:5px 11px;border-radius:999px;
+    font-size:11px;font-weight:600;color:var(--ink);
+    background:linear-gradient(180deg,var(--glass-strong),var(--glass-b));
+    -webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
+    border:1px solid var(--glass-line);box-shadow:var(--shadow-sm);transition:.12s;
+  }
+  .toggle .ic{font-size:12px;color:var(--blue-deep)}
+  .toggle.off{opacity:.6}
+  .toggle.off .ic{color:var(--ink-3)}
+
+  /* ---------- Player (unten angeheftet) ---------- */
+  .player{
+    position:fixed;left:50%;bottom:12px;transform:translateX(-50%);z-index:70;
+    width:min(780px,calc(100vw - 24px));padding:9px 16px 9px 10px;border-radius:22px;
+    display:flex;align-items:center;gap:12px;box-shadow:var(--shadow);
+  }
+  .player .cover{width:48px;height:48px;border-radius:12px;flex:none;object-fit:cover;
+    border:1px solid var(--glass-line);box-shadow:0 2px 6px rgba(0,40,80,.35)}
+  .player .meta{width:150px;flex:none;min-width:0}
+  .player .meta b,.player .meta span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .player .meta b{font-size:12.5px;font-weight:600}
+  .player .meta span{font-size:11px;color:var(--ink-2)}
+  .player .mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px;align-items:center}
+  .player .ctl{display:flex;align-items:center;gap:10px}
+  .pbtn{
+    width:30px;height:30px;border-radius:50%;border:0;padding:0;cursor:pointer;flex:none;
+    display:flex;align-items:center;justify-content:center;background:transparent;color:var(--ink);transition:.12s;
+  }
+  .pbtn .ic{font-size:15px}
+  .pbtn:hover{background:var(--inset-2)}
+  .pbtn:active{transform:scale(.92)}
+  .pbtn.on{color:var(--leaf-lo)}
+  .pbtn.orb{
+    width:40px;height:40px;color:#fff;border:1px solid rgba(255,255,255,.8);
+    background:radial-gradient(120% 90% at 50% 0%,var(--leaf-hi) 0%,var(--leaf) 45%,var(--leaf-lo) 100%);
+    box-shadow:inset 0 2px 1px rgba(255,255,255,.75),inset 0 -6px 10px rgba(255,255,255,.22),0 3px 9px rgba(30,110,0,.5);
+  }
+  .pbtn.orb:hover{filter:brightness(1.1);background:radial-gradient(120% 90% at 50% 0%,var(--leaf-hi) 0%,var(--leaf) 45%,var(--leaf-lo) 100%)}
+  .pbtn.orb .ic{font-size:16px;filter:drop-shadow(0 1px 1px rgba(20,80,0,.6))}
+  .player .seek{width:100%;display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+  .player .vol{display:flex;align-items:center;gap:4px;flex:none}
+  @media (max-width:700px){.player{gap:8px;padding-right:10px}.player .meta{width:96px}.player .vol input{display:none}.player .ctl{gap:4px}}
+
+  input[type=range]{-webkit-appearance:none;appearance:none;flex:1;min-width:0;height:14px;background:transparent;cursor:pointer;margin:0;--v:0%}
+  input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:999px;border:1px solid var(--hair);
+    background:linear-gradient(90deg,var(--leaf) var(--v),var(--inset-2) var(--v));box-shadow:inset 0 1px 2px rgba(0,40,80,.3)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;margin-top:-5px;border-radius:50%;
+    border:1px solid rgba(255,255,255,.9);background:radial-gradient(circle at 50% 25%,#fff,var(--aqua-hi) 45%,var(--aqua));
+    box-shadow:0 1px 3px rgba(0,40,80,.5)}
+  .player .vol input{width:74px;flex:none}
+
+  .plist{
+    position:fixed;right:max(12px,calc(50vw - 390px));bottom:88px;z-index:71;width:300px;max-height:min(360px,55vh);
+    overflow:auto;border-radius:16px;padding:6px;box-shadow:var(--shadow);
+  }
+  .plist .hd{padding:8px 10px 6px;font-size:11px;font-weight:600;color:var(--ink-2)}
+  .plist .tr{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:10px;cursor:pointer;font-size:12.5px}
+  .plist .tr:hover{background:var(--inset-2)}
+  .plist .tr.now{background:var(--blue-soft);color:var(--blue-deep);font-weight:600}
+  .plist .tr .n{width:16px;flex:none;text-align:center;font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+  .plist .tr .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .plist .tr .t small{display:block;font-size:10.5px;font-weight:400;color:var(--ink-3)}
+  .plist .ft{padding:8px 10px;font-size:10.5px;color:var(--ink-3);line-height:1.45;border-top:1px solid var(--hair-soft);margin-top:4px}
+
+  /* Update-Dialog */
+  #upd-box{position:fixed;inset:0;z-index:85;display:flex;align-items:center;justify-content:center;
+    background:rgba(0,25,50,.45);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+  #upd-box .card{width:min(420px,calc(100vw - 32px));margin:0}
+  #upd-box h2{margin:0 0 4px;font-size:18px;font-weight:300}
+  #upd-box .notes{white-space:pre-wrap;font-size:12px;color:var(--ink-2);max-height:160px;overflow:auto;
+    margin:10px 0 0;padding:10px 12px;border-radius:var(--r-ctl);background:var(--inset);border:1px solid var(--hair-soft)}
+  #upd-box .btns{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+
+
+  /* =====================================================================
+     Mikroanimationen — kurz, weich, nie im Weg. Bei "Bewegung reduzieren"
+     (Systemeinstellung) sind sie aus.
+     ===================================================================== */
+  @keyframes fade-in{from{opacity:0}to{opacity:1}}
+  @keyframes rise{from{opacity:0;transform:translateY(14px) scale(.97)}to{opacity:1;transform:none}}
+  @keyframes drop-in{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
+  @keyframes slide-up{from{opacity:0;transform:translate(-50%,24px)}to{opacity:1;transform:translate(-50%,0)}}
+  @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+  @keyframes sheen{from{transform:translateX(-130%) skewX(-20deg)}to{transform:translateX(330%) skewX(-20deg)}}
+  @keyframes pulse-ring{0%{box-shadow:0 0 0 0 rgba(120,220,60,.55)}100%{box-shadow:0 0 0 14px rgba(120,220,60,0)}}
+  @keyframes stripes{to{background-position:28px 0,0 0}}
+  @keyframes wiggle{0%,100%{transform:rotate(0)}25%{transform:rotate(-8deg)}75%{transform:rotate(8deg)}}
+  @keyframes eq{0%,100%{transform:scaleY(.35)}50%{transform:scaleY(1)}}
+  @keyframes ripple{to{transform:scale(3.2);opacity:0}}
+  @keyframes shake{0%,100%{transform:none}20%,60%{transform:translateX(-4px)}40%,80%{transform:translateX(4px)}}
+
+  /* Auftritt: Kopfzeile faellt ein, Kacheln und Karten steigen gestaffelt auf */
+  .topbar{animation:drop-in .45s cubic-bezier(.2,.9,.3,1.2) backwards}
+  .tile{animation:rise .5s cubic-bezier(.2,.9,.3,1.15) backwards;animation-delay:calc(var(--i,0)*45ms + 80ms)}
+  .card:not(.hidden){animation:rise .42s cubic-bezier(.2,.9,.3,1.1) backwards}
+  #home>.card{animation-delay:.5s}
+  .toolbar:not(.hidden){animation:drop-in .35s ease backwards}
+  .footer{animation:fade-in .6s .6s backwards}
+  .player{animation:slide-up .55s .35s cubic-bezier(.2,.9,.3,1.15) backwards}
+  .fl{animation:rise .35s ease backwards;animation-delay:calc(var(--i,0)*40ms)}
+  .res{animation:rise .3s ease backwards}
+  .res.err{animation:rise .3s ease backwards,shake .35s .3s}
+  .plist:not(.hidden){animation:rise .22s cubic-bezier(.2,.9,.3,1.2) backwards;transform-origin:bottom right}
+  #upd-box:not(.hidden),#lightbox:not(.hidden){animation:fade-in .2s ease backwards}
+  #upd-box:not(.hidden) .card{animation:rise .35s cubic-bezier(.2,.9,.3,1.25) backwards}
+  #lightbox:not(.hidden) img{animation:pop-in .3s cubic-bezier(.2,1.2,.4,1) backwards}
+
+  /* Logo und Kachel-Symbole schweben leicht */
+  .topbar img.logo{animation:bob 4.5s ease-in-out infinite}
+  .topbar img.logo:hover{animation:wiggle .5s ease}
+  .tile:hover img{animation:bob 1.6s ease-in-out infinite}
+  .drop img{transition:transform .25s cubic-bezier(.2,1.4,.4,1)}
+  .drop:hover img{transform:translateY(-4px) scale(1.08)}
+  .drop.hover img{animation:bob .7s ease-in-out infinite}
+
+  /* Glanz-Streifen, der beim Ueberfahren ueber Glas und Knoepfe laeuft */
+  .tile,button.go,.ghost,.backbtn,.toggle,.pill.active,.pbtn.orb{overflow:hidden}
+  .tile::after,button.go::after,.ghost::after,.backbtn::after,.toggle::after{
+    content:"";position:absolute;top:0;bottom:0;left:0;width:34%;pointer-events:none;opacity:0;
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.65),transparent);
+    transform:translateX(-130%) skewX(-20deg);
+  }
+  button.go,.toggle,.ghost,.backbtn{position:relative}
+  .tile:hover::after,button.go:not(:disabled):hover::after,.ghost:hover::after,.backbtn:hover::after,.toggle:hover::after{
+    opacity:1;animation:sheen .75s ease}
+
+  /* Knoepfe: federn beim Druecken, Symbole reagieren */
+  button.go,.ghost,.backbtn,.toggle,.pill,.pbtn,.res a,.res .act{transition:transform .16s cubic-bezier(.2,1.6,.4,1),filter .15s,background .15s,color .15s,box-shadow .2s}
+  button.go:not(:disabled):hover{transform:translateY(-1px)}
+  button.go:not(:disabled):hover .ic{animation:wiggle .45s ease}
+  .ghost:hover img,.ghost:hover .ic{animation:wiggle .45s ease}
+  .backbtn:hover .ic{transform:translateX(-3px)}
+  .backbtn .ic{transition:transform .2s cubic-bezier(.2,1.6,.4,1)}
+  .toggle:hover{transform:translateY(-1px)}
+  .toggle:hover .ic{transform:rotate(180deg)}
+  .toggle .ic{transition:transform .5s cubic-bezier(.2,1,.3,1)}
+  .pill:active{transform:scale(.94)}
+  .pill.active{animation:pop-in .25s cubic-bezier(.2,1.5,.4,1)}
+  .ghost.update:not(.hidden){animation:pulse-ring 1.8s ease-out infinite}
+  .ghost.update .ic{animation:spin 3s linear infinite}
+
+  /* Eingabefelder heben sich beim Fokus */
+  input[type=text],textarea,select{transition:border-color .15s,box-shadow .2s,transform .2s,background .2s}
+  input[type=text]:focus,textarea:focus,select:focus{transform:translateY(-1px);background:rgba(255,255,255,.8)}
+  label{transition:color .15s}
+  label:has(+ input:focus),label:has(+ textarea:focus),label:has(+ select:focus){color:var(--blue-deep)}
+
+  /* Dateiliste und Ergebnisse */
+  .fl{transition:padding-left .18s ease}
+  .fl:hover{padding-left:6px}
+  .fl img{transition:transform .2s cubic-bezier(.2,1.6,.4,1)}
+  .fl:hover img{transform:scale(1.25) rotate(-6deg)}
+  .res.ok>.ic{animation:pop-in .4s cubic-bezier(.2,1.8,.4,1) backwards}
+  .res a:hover,.res .act:hover{transform:translateY(-1px)}
+
+  /* Fortschrittsbalken: laufende Streifen */
+  .bar>i{background-image:repeating-linear-gradient(-45deg,rgba(255,255,255,.35) 0 7px,transparent 7px 14px),
+    linear-gradient(180deg,var(--leaf-hi) 0%,var(--leaf) 50%,var(--leaf-lo) 52%,var(--leaf) 100%);
+    background-size:28px 100%,100% 100%;animation:stripes .8s linear infinite}
+
+  /* Player: Cover dreht sich sanft mit, Orb pulsiert, Equalizer im aktuellen Titel */
+  .player .cover{transition:transform .4s cubic-bezier(.2,1.2,.4,1),border-radius .4s}
+  .player.playing .cover{animation:bob 2.4s ease-in-out infinite}
+  .player .cover:hover{transform:scale(1.08) rotate(-4deg)}
+  .player.playing .pbtn.orb{animation:pulse-ring 2s ease-out infinite}
+  .pbtn:hover .ic{transform:scale(1.15)}
+  .pbtn .ic{transition:transform .18s cubic-bezier(.2,1.6,.4,1)}
+  .player .meta b{transition:opacity .25s,transform .25s}
+  .player .meta.swap b,.player .meta.swap span{opacity:0;transform:translateY(6px)}
+  .player .meta span{transition:opacity .25s .05s,transform .25s .05s}
+  input[type=range]::-webkit-slider-thumb{transition:transform .15s cubic-bezier(.2,1.6,.4,1)}
+  input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.3)}
+  .plist .tr{transition:background .15s,padding-left .15s}
+  .plist .tr:hover{padding-left:14px}
+  .eq{display:inline-flex;align-items:flex-end;gap:2px;width:16px;height:12px;flex:none;justify-content:center}
+  .eq i{width:3px;height:100%;border-radius:2px;background:var(--leaf-lo);transform-origin:bottom;animation:eq .8s ease-in-out infinite}
+  .eq i:nth-child(2){animation-delay:.25s}.eq i:nth-child(3){animation-delay:.5s}
+  .player:not(.playing)~* .eq i,.paused .eq i{animation-play-state:paused}
+
+  /* Klick-Welle auf Glas */
+  .rip{position:absolute;width:40px;height:40px;margin:-20px 0 0 -20px;border-radius:50%;pointer-events:none;
+    background:radial-gradient(circle,rgba(255,255,255,.75),rgba(255,255,255,0) 70%);animation:ripple .6s ease-out forwards}
+
+  /* Galerie */
+  .shot img{transition:transform .5s cubic-bezier(.2,1,.3,1)}
+  .shot:hover img{transform:scale(1.04)}
+
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
+  }
+
+
+  /* =====================================================================
+     Start-Animation: Himmel, Lichtblitz, aufsteigende Seifenblasen, die
+     Glaskugel federt herein, der Name erscheint, eine Wasserwelle rauscht
+     durch — dann "platzt" die Blase und gibt die Oberflaeche frei.
+     Klick oder Taste ueberspringt. Bilder: fx-*.webp (Nano Banana).
+     ===================================================================== */
+  #intro{display:none}
+  html.intro-on #intro{
+    display:flex;position:fixed;inset:0;z-index:200;overflow:hidden;cursor:pointer;
+    flex-direction:column;align-items:center;justify-content:center;
+    background:radial-gradient(120% 90% at 50% 38%,#bff0ff 0%,#4fc3f7 32%,#0e7fd6 68%,#054a9c 100%);
+    clip-path:circle(150% at 50% 42%);
+  }
+  html.intro-on #intro.out{animation:intro-pop .75s cubic-bezier(.7,0,.3,1) forwards}
+  @keyframes intro-pop{
+    0%{clip-path:circle(150% at 50% 42%);filter:none}
+    35%{filter:brightness(1.25)}
+    100%{clip-path:circle(0% at 50% 42%);filter:brightness(1.6)}
+  }
+  /* solange das Intro laeuft, warten die Auftritts-Animationen der Seite */
+  html.intro-on:not(.intro-end) .wrap *,html.intro-on:not(.intro-end) .wrap,
+  html.intro-on:not(.intro-end) .player{animation-play-state:paused !important}
+
+  #intro .flare{position:absolute;left:50%;top:42%;width:min(130vmin,900px);aspect-ratio:1;
+    margin:calc(min(130vmin,900px)/-2) 0 0 calc(min(130vmin,900px)/-2);opacity:0;
+    background:url(/static/img/fx-flare.webp) center/contain no-repeat;
+    animation:intro-flare 2.6s ease-out .1s forwards}
+  @keyframes intro-flare{0%{opacity:0;transform:scale(.2) rotate(-40deg)}35%{opacity:1}
+    100%{opacity:.85;transform:scale(1.15) rotate(25deg)}}
+
+  #intro .rays{position:absolute;inset:-20%;opacity:.35;mix-blend-mode:screen;
+    background:repeating-conic-gradient(from 0deg at 50% 45%,rgba(255,255,255,.55) 0 6deg,transparent 6deg 20deg);
+    -webkit-mask-image:radial-gradient(circle at 50% 45%,#000 0,transparent 62%);mask-image:radial-gradient(circle at 50% 45%,#000 0,transparent 62%);
+    animation:spin 40s linear infinite}
+
+  #intro .bub{position:absolute;bottom:-160px;left:var(--x);width:var(--s);aspect-ratio:1;opacity:.9;
+    background:url(/static/img/fx-bubble.webp) center/contain no-repeat;
+    animation:intro-bub var(--d) cubic-bezier(.3,.1,.4,1) var(--w) forwards}
+  @keyframes intro-bub{
+    0%{transform:translate(0,0) scale(.6)}
+    50%{transform:translate(var(--sway),-62vh) scale(1)}
+    100%{transform:translate(calc(var(--sway)*-0.6),-128vh) scale(1.08)}}
+
+  #intro .orbwrap{position:relative;width:min(34vmin,190px);aspect-ratio:1;margin-top:-6vh}
+  #intro .orb{width:100%;height:100%;opacity:0;filter:drop-shadow(0 18px 30px rgba(0,40,110,.5));
+    animation:intro-orb .95s cubic-bezier(.2,1.5,.35,1) .35s forwards,bob 3s ease-in-out 1.4s infinite}
+  @keyframes intro-orb{0%{opacity:0;transform:translateY(60vh) scale(.3) rotate(-160deg)}
+    60%{opacity:1}100%{opacity:1;transform:none}}
+  #intro .ring{position:absolute;inset:0;border-radius:50%;border:2px solid rgba(255,255,255,.85);opacity:0;
+    animation:intro-ring 1.3s ease-out forwards}
+  #intro .ring:nth-child(2){animation-delay:1.05s}
+  #intro .ring:nth-child(3){animation-delay:1.3s}
+  #intro .ring:nth-child(4){animation-delay:1.55s}
+  @keyframes intro-ring{0%{opacity:.9;transform:scale(.8)}100%{opacity:0;transform:scale(2.6)}}
+
+  #intro h1{position:relative;margin:3vh 0 0;font-size:clamp(26px,6.4vmin,44px);font-weight:200;letter-spacing:.01em;
+    color:#fff;text-shadow:0 2px 10px rgba(0,50,120,.55);white-space:nowrap;overflow:hidden}
+  #intro h1 span{display:inline-block;opacity:0;animation:intro-letter .55s cubic-bezier(.2,1.4,.4,1) forwards;
+    animation-delay:calc(1s + var(--i)*38ms)}
+  @keyframes intro-letter{0%{opacity:0;transform:translateY(.7em) scale(.6);filter:blur(6px)}100%{opacity:1;transform:none;filter:none}}
+  #intro h1::after{content:"";position:absolute;top:0;bottom:0;left:0;width:30%;
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.9),transparent);
+    transform:translateX(-130%) skewX(-20deg);animation:sheen .9s ease 1.75s}
+  #intro p{margin:.6vh 0 0;font-size:clamp(11px,2.4vmin,14px);color:rgba(255,255,255,.92);letter-spacing:.14em;
+    text-transform:uppercase;text-shadow:0 1px 4px rgba(0,50,120,.6);opacity:0;animation:rise .6s ease 1.7s forwards}
+
+  #intro .wave{position:absolute;left:-20%;right:-20%;bottom:-5%;height:46vh;opacity:0;
+    background:url(/static/img/fx-wave.webp) center bottom/auto 100% no-repeat;
+    animation:intro-wave 2.2s cubic-bezier(.3,.6,.3,1) .7s forwards}
+  @keyframes intro-wave{0%{opacity:0;transform:translateX(-70%) rotate(-6deg)}25%{opacity:1}
+    100%{opacity:1;transform:translateX(6%) rotate(0)}}
+  #intro .skip{position:absolute;bottom:14px;right:16px;font-size:10.5px;color:rgba(255,255,255,.75);
+    opacity:0;animation:fade-in .5s 1.2s forwards}
+
+  /* kurze Meldung unten */
+  #toast{
+    position:fixed;left:50%;bottom:96px;transform:translateX(-50%) translateY(10px) scale(.9);opacity:0;
+    padding:8px 14px;border-radius:999px;font-size:12px;font-weight:600;color:var(--ink);
+    background:var(--glass-strong);border:1px solid var(--glass-line);box-shadow:var(--shadow);
+    -webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
+    pointer-events:none;transition:.3s cubic-bezier(.2,1.5,.4,1);z-index:80;
+  }
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+<!-- ===================== Start-Animation ===================== -->
+<div id="intro" aria-hidden="true">
+  <div class="rays"></div>
+  <div class="flare"></div>
+  <div class="wave"></div>
+  <div class="orbwrap">
+    <i class="ring"></i><i class="ring"></i><i class="ring"></i><i class="ring"></i>
+    <img class="orb" src="/static/img/appicon-512.png" alt="">
+  </div>
+  <h1 id="intro-title">Aviens Toolbox</h1>
+  <p>Medien · Design · KI</p>
+  <span class="skip">Klick zum Überspringen</span>
+</div>
+<script>
+(function(){
+  var root=document.documentElement, intro=document.getElementById('intro');
+  if(!root.classList.contains('intro-on')){ intro.remove(); return; }
+  try{ sessionStorage.setItem('av_intro','1'); }catch(e){}
+  // Name in einzelne Buchstaben zerlegen (gestaffelter Auftritt)
+  var h=document.getElementById('intro-title'), txt=h.textContent; h.textContent='';
+  txt.split('').forEach(function(ch,i){
+    var sp=document.createElement('span'); sp.style.setProperty('--i',i);
+    sp.textContent = ch===' ' ? '\u00a0' : ch; h.appendChild(sp);
+  });
+  // Seifenblasen
+  for(var i=0;i<14;i++){
+    var b=document.createElement('i'); b.className='bub';
+    b.style.setProperty('--x',(Math.random()*100-4)+'%');
+    b.style.setProperty('--s',(34+Math.random()*110)+'px');
+    b.style.setProperty('--d',(2.2+Math.random()*1.8)+'s');
+    b.style.setProperty('--w',(Math.random()*1.5)+'s');
+    b.style.setProperty('--sway',(Math.random()*120-60)+'px');
+    intro.insertBefore(b, intro.querySelector('.orbwrap'));
+  }
+  // leiser Start-Klang (nur wenn der Browser Ton ohne Klick erlaubt)
+  try{
+    var AC=window.AudioContext||window.webkitAudioContext, ac=new AC();
+    if(ac.state==='running'){
+      [[523.25,.45],[659.25,.6],[783.99,.75],[1046.5,1.0]].forEach(function(n){
+        var o=ac.createOscillator(), g=ac.createGain(), t=ac.currentTime+n[1];
+        o.type='sine'; o.frequency.value=n[0];
+        g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.12,t+0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001,t+1.4);
+        o.connect(g).connect(ac.destination); o.start(t); o.stop(t+1.5);
+      });
+    }
+  }catch(e){}
+  var done=false;
+  function finish(){
+    if(done) return; done=true;
+    root.classList.add('intro-end');          // Seite darf jetzt ihre Auftritte spielen
+    intro.classList.add('out');
+    setTimeout(function(){ intro.remove(); root.classList.remove('intro-on','intro-end'); }, 800);
+  }
+  if(location.search.indexOf('intro=hold')<0) setTimeout(finish, 2900);
+  intro.addEventListener('pointerdown', finish);
+  window.addEventListener('keydown', finish, {once:true});
+})();
+</script>
+<video id="bgvid" autoplay muted loop playsinline preload="auto" poster="/static/wall-day.jpg"
+       src="/static/wall-loop.mp4" aria-hidden="true"></video>
+<div class="wrap">
+
+  <!-- ===================== Kopfzeile ===================== -->
+  <div class="topbar">
+    <img src="/static/img/appicon-128.png" alt="" class="logo">
+    <div>
+      <h1>Aviens Toolbox</h1>
+      <p>Medien- &amp; Design-Werkzeuge, lokal auf deinem Rechner <span class="vers">· v{{ version }}</span></p>
+    </div>
+    <div class="sp"></div>
+    <button class="ghost update hidden" id="upd-btn" title="Neue Version verfügbar">
+      <i class="ic" style="--ic:url(/static/img/ic-update.png)"></i><span>Update</span>
+    </button>
+    <button class="ghost" id="open-folder" title="Ausgabe-Ordner öffnen">
+      <img src="/static/img/tool-folder.png" alt=""><span>Ausgabe</span>
+    </button>
+  </div>
+
+  <!-- ===================== Startbildschirm ===================== -->
+  <div id="home">
+    <div class="tiles" id="tiles"></div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Zuletzt erstellt</h2>
+        <div class="sp"></div>
+        <span class="sub" id="st-size"></span>
+      </div>
+      <div class="filelist" id="st-recent"><div class="empty">Noch nichts erstellt.</div></div>
+    </div>
+  </div>
+
+  <!-- ===================== Werkzeug-Ansicht ===================== -->
+  <div class="toolbar hidden" id="toolbar">
+    <button class="backbtn" id="backbtn">
+      <i class="ic" style="--ic:url(/static/img/ic-back.png)"></i><span>Übersicht</span>
+    </button>
+    <div class="tooltitle"><img id="tt-ico" alt=""><span id="tt-name"></span></div>
+  </div>
+
+  <!-- TANGA GENERATOR -->
+  <div class="card hidden" id="tab-gen">
+    <div class="gen-setup hidden" id="gen-setup">
+      <img src="/static/img/tool-tanga.png" alt="">
+      <div class="tx">
+        <b>Einmalige Einrichtung</b>
+        <span id="gen-setup-text">Das Modell wird einmal heruntergeladen und läuft danach komplett offline.</span>
+        <div class="bar hidden" id="gen-setup-bar"><i></i></div>
+      </div>
+      <button class="go leaf slim" id="gen-setup-go">Herunterladen</button>
+    </div>
+
+    <label>Beschreibung <span class="opt">— was soll zu sehen sein? Englisch klappt am besten</span></label>
+    <textarea id="gen-prompt" placeholder="a glossy glass dolphin jumping out of turquoise water, blue sky, bubbles, 2000s tech wallpaper"></textarea>
+
+    <div class="row">
+      <div>
+        <label>Format</label>
+        <div class="pills" id="gen-ratio">
+          <div class="pill active" data-v="1:1">1:1</div>
+          <div class="pill" data-v="4:3">4:3</div>
+          <div class="pill" data-v="3:4">3:4</div>
+          <div class="pill" data-v="16:9">16:9</div>
+          <div class="pill" data-v="9:16">9:16</div>
+        </div>
+      </div>
+      <div>
+        <label>Anzahl</label>
+        <div class="pills" id="gen-count">
+          <div class="pill active" data-v="1">1</div>
+          <div class="pill" data-v="2">2</div>
+          <div class="pill" data-v="4">4</div>
+        </div>
+      </div>
+    </div>
+
+    <label>Modell</label>
+    <div class="models" id="gen-models"></div>
+
+    <div id="gen-custom" class="hidden">
+      <label>Eigene Modell-Datei <span class="opt">— kompletter Checkpoint, z. B. SDXL (.safetensors / .gguf)</span></label>
+      <div class="row">
+        <div><input type="text" id="gen-custom-path" class="mono" placeholder="C:\\Modelle\\mein-modell.safetensors"></div>
+        <div style="flex:0 0 auto"><button class="go slim" id="gen-custom-save" style="height:100%">Übernehmen</button></div>
+      </div>
+      <div class="row">
+        <div><label>Schritte</label><input type="text" id="gen-steps" class="mono" value="24"></div>
+        <div><label>CFG <span class="opt">(Treue zur Beschreibung)</span></label><input type="text" id="gen-cfg" class="mono" value="6"></div>
+      </div>
+      <label>Nicht im Bild <span class="opt">(optional)</span></label>
+      <input type="text" id="gen-negative" placeholder="blurry, low quality, watermark">
+    </div>
+
+    <label>Seed <span class="opt">(leer = Zufall)</span></label>
+    <input type="text" id="gen-seed" class="mono" placeholder="z. B. 42">
+
+    <div id="gen-ref-box">
+    <label>Vorlage <span class="opt">(optional — Bild, das nach deiner Beschreibung umgebaut wird)</span></label>
+    <div class="drop small" id="gdrop">
+      <img src="/static/img/tool-cutout.png" alt="">
+      <div id="gdrop-text">Bild hierher ziehen oder klicken</div>
+      <input type="file" id="gfile-input" class="hidden" accept="image/*">
+    </div>
+    </div>
+    <div class="hint">Alles läuft komplett lokal auf deiner Grafikkarte — nichts wird hochgeladen.
+      Das erste Bild dauert etwas länger, weil das Modell geladen wird. Größere Modelle brauchen mehr
+      Grafikspeicher und Zeit, liefern aber sichtbar bessere Bilder.</div>
+
+    <button class="go" id="gen-go">
+      <i class="ic" style="--ic:url(/static/img/ic-wand.png)"></i><span>Generieren</span>
+    </button>
+    <div class="bar hidden" id="gen-bar"><i></i></div>
+    <div class="counter hidden" id="gen-count-text"></div>
+    <div class="gallery" id="gen-gallery"></div>
+    <div class="results" id="gen-res"></div>
+  </div>
+
+  <!-- YOUTUBE -->
+  <div class="card hidden" id="tab-yt">
+    <label>YouTube-Links <span class="opt">— ein Link pro Zeile = Stapelverarbeitung</span></label>
+    <textarea id="yt-url" placeholder="https://www.youtube.com/watch?v=...&#10;https://youtu.be/...&#10;..."></textarea>
+
+    <label>Format</label>
+    <div class="pills" id="yt-formats">
+      <div class="pill active" data-v="mp3">MP3</div>
+      <div class="pill" data-v="wav">WAV</div>
+      <div class="pill" data-v="mp4">MP4 · Video</div>
+    </div>
+
+    <label>Qualität / Bitrate <span class="opt">(MP3)</span></label>
+    <select id="yt-bitrate">
+      <option value="320">320 kbps · beste Qualität</option>
+      <option value="256">256 kbps</option>
+      <option value="192" selected>192 kbps</option>
+      <option value="128">128 kbps</option>
+    </select>
+
+    <label>Zeitausschnitt <span class="opt">(optional)</span></label>
+    <div class="row">
+      <div><input type="text" id="yt-start" placeholder="Start — z. B. 14 oder 1:14"></div>
+      <div><input type="text" id="yt-end" placeholder="Ende — z. B. 18 oder 1:18"></div>
+    </div>
+    <div class="hint">Leer = ganzes Video. Format: Sekunden, mm:ss oder hh:mm:ss.
+      Bei mehreren Links gilt der Ausschnitt für jedes Video.</div>
+
+    <button class="go" id="yt-go">
+      <i class="ic" style="--ic:url(/static/img/ic-youtube.png)"></i><span>Herunterladen</span>
+    </button>
+    <div class="counter hidden" id="yt-count"></div>
+    <div class="results" id="yt-res"></div>
+  </div>
+
+  <!-- KONVERTIEREN -->
+  <div class="card hidden" id="tab-file">
+    <div class="drop" id="drop">
+      <img src="/static/img/tool-folder.png" alt="">
+      <div id="drop-text">Dateien hierher ziehen oder klicken</div>
+      <input type="file" id="file-input" class="hidden" multiple>
+    </div>
+
+    <label>Zielformat</label>
+    <select id="file-target">
+      <optgroup label="Bild">
+        <option value="webp">WEBP</option><option value="png">PNG</option>
+        <option value="jpg">JPG</option><option value="bmp">BMP</option><option value="tiff">TIFF</option>
+      </optgroup>
+      <optgroup label="Dokument">
+        <option value="pdf">PDF</option>
+      </optgroup>
+      <optgroup label="Audio">
+        <option value="mp3">MP3</option><option value="wav">WAV</option><option value="m4a">M4A</option>
+        <option value="aac">AAC</option><option value="flac">FLAC</option><option value="ogg">OGG</option>
+      </optgroup>
+      <optgroup label="Video">
+        <option value="mp4">MP4</option><option value="mov">MOV</option><option value="mkv">MKV</option>
+        <option value="webm">WEBM</option><option value="gif">GIF</option>
+      </optgroup>
+    </select>
+
+    <label>Audio-Bitrate <span class="opt">(bei mp3/aac/ogg/m4a)</span></label>
+    <select id="file-bitrate">
+      <option value="320">320 kbps · beste Qualität</option>
+      <option value="256">256 kbps</option>
+      <option value="192" selected>192 kbps</option>
+      <option value="128">128 kbps</option>
+    </select>
+    <div class="hint">Bilder: jpg ↔ png ↔ webp … · <b>SVG</b> → png/jpg/webp · Bild → <b>PDF</b> · Video → Audio, z. B. mp4 → mp3.
+      Mehrere Dateien werden nacheinander verarbeitet.</div>
+
+    <button class="go" id="file-go" disabled>
+      <i class="ic" style="--ic:url(/static/img/ic-convert.png)"></i><span>Konvertieren</span>
+    </button>
+    <div class="counter hidden" id="file-count"></div>
+    <div class="results" id="file-res"></div>
+  </div>
+
+  <!-- KOMPRIMIEREN -->
+  <div class="card hidden" id="tab-comp">
+    <div class="drop" id="cdrop">
+      <img src="/static/img/tool-folder.png" alt="">
+      <div id="cdrop-text">Dateien hierher ziehen oder klicken</div>
+      <input type="file" id="cfile-input" class="hidden" multiple>
+    </div>
+
+    <label>Modus</label>
+    <div class="pills" id="comp-mode">
+      <div class="pill active" data-v="shrink">Verkleinern</div>
+      <div class="pill" data-v="zip">Als ZIP packen</div>
+    </div>
+
+    <div id="shrink-opts">
+      <label>Stärke</label>
+      <div class="pills" id="comp-level">
+        <div class="pill" data-v="light">Leicht</div>
+        <div class="pill active" data-v="medium">Mittel</div>
+        <div class="pill" data-v="strong">Stark</div>
+      </div>
+      <div class="hint">Bilder werden kleiner gerechnet (JPG/WebP/PNG), Video → MP4 (H.264), Audio → MP3.
+        Stärker = kleiner, aber mehr Qualitätsverlust.</div>
+    </div>
+    <div id="zip-opts" class="hidden">
+      <div class="hint">Alle gewählten Dateien landen in <b>einem</b> .zip-Archiv — verlustfrei,
+        ohne Qualitätsverlust.</div>
+    </div>
+
+    <button class="go" id="comp-go" disabled>
+      <i class="ic" style="--ic:url(/static/img/ic-compress.png)"></i><span>Komprimieren</span>
+    </button>
+    <div class="counter hidden" id="comp-count"></div>
+    <div class="results" id="comp-res"></div>
+  </div>
+
+  <!-- TRANSKRIPT -->
+  <div class="card hidden" id="tab-tr">
+    <label>Video- / Stream-Links <span class="opt">— m3u8, YouTube … ein Link pro Zeile</span></label>
+    <textarea id="tr-url" placeholder="https://…cloudfront.net/….m3u8&#10;https://www.youtube.com/watch?v=…"></textarea>
+
+    <label>… oder lokale Audio-/Video-Dateien</label>
+    <div class="drop" id="tdrop">
+      <img src="/static/img/tool-folder.png" alt="">
+      <div id="tdrop-text">Dateien hierher ziehen oder klicken</div>
+      <input type="file" id="tfile-input" class="hidden" multiple accept="audio/*,video/*">
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Whisper-Modell</label>
+        <select id="tr-model">
+          <option value="large-v3" selected>large-v3 · beste Qualität</option>
+          <option value="medium">medium · schneller</option>
+          <option value="small">small · am schnellsten</option>
+        </select>
+      </div>
+      <div>
+        <label>Sprache</label>
+        <select id="tr-lang">
+          <option value="de" selected>Deutsch</option>
+          <option value="en">Englisch</option>
+          <option value="auto">Automatisch</option>
+        </select>
+      </div>
+    </div>
+
+    <label>Referer <span class="opt">(optional — nur falls der Stream mit 403 blockt)</span></label>
+    <input type="text" id="tr-referer" placeholder="https://event.webinarjam.com/… — Seite, auf der das Video läuft">
+
+    <label>Video-Datei</label>
+    <div class="pills" id="tr-keep">
+      <div class="pill active" data-v="1">MP4 behalten</div>
+      <div class="pill" data-v="0">Nur Transkript</div>
+    </div>
+    <div class="hint">Ausgabe pro Video: <b>.txt</b> (mit Zeitmarken) und <b>.srt</b> (Untertitel).
+      Downloads starten sofort — signierte Stream-URLs laufen ab. Transkribiert wird nacheinander.
+      Beim ersten Lauf lädt das Whisper-Modell (large-v3 ≈ 3 GB).</div>
+
+    <button class="go" id="tr-go">
+      <i class="ic" style="--ic:url(/static/img/ic-transcript.png)"></i><span>Transkribieren</span>
+    </button>
+    <div class="counter hidden" id="tr-count"></div>
+    <div class="results" id="tr-res"></div>
+  </div>
+
+  <!-- FREISTELLER -->
+  <div class="card hidden" id="tab-bg">
+    <div class="drop" id="bdrop">
+      <img src="/static/img/tool-cutout.png" alt="">
+      <div id="bdrop-text">Bilder hierher ziehen oder klicken</div>
+      <input type="file" id="bfile-input" class="hidden" multiple accept="image/*">
+    </div>
+
+    <label>Hintergrund</label>
+    <div class="pills" id="bg-mode">
+      <div class="pill active" data-v="transparent">Transparent (PNG)</div>
+      <div class="pill" data-v="white">Weiß</div>
+    </div>
+    <div class="hint">Die KI (rembg / IS-Net) erkennt das Motiv und entfernt den Hintergrund — komplett lokal.
+      Beim ersten Mal lädt das Modell (≈ 170 MB) automatisch.</div>
+
+    <button class="go" id="bg-go" disabled>
+      <i class="ic" style="--ic:url(/static/img/ic-cutout.png)"></i><span>Freistellen</span>
+    </button>
+    <div class="counter hidden" id="bg-count"></div>
+    <div class="results" id="bg-res"></div>
+  </div>
+
+  <!-- VEKTORISIERER -->
+  <div class="card hidden" id="tab-vec">
+    <div class="drop" id="vdrop">
+      <img src="/static/img/tool-vector.png" alt="">
+      <div id="vdrop-text">Bilder hierher ziehen oder klicken</div>
+      <input type="file" id="vfile-input" class="hidden" multiple accept="image/*">
+    </div>
+
+    <label>Modus</label>
+    <div class="pills" id="vec-mode">
+      <div class="pill active" data-v="color">Farbe</div>
+      <div class="pill" data-v="bw">Schwarz-Weiß</div>
+    </div>
+
+    <label>Detailgrad</label>
+    <div class="pills" id="vec-detail">
+      <div class="pill" data-v="fein">Fein</div>
+      <div class="pill active" data-v="normal">Normal</div>
+      <div class="pill" data-v="grob">Grob</div>
+    </div>
+    <div class="hint">Wandelt PNG/JPG in echtes <b>SVG</b> (vtracer) — ideal für Logos, Icons und
+      Illustrationen. Fotos funktionieren, ergeben aber große Dateien.</div>
+
+    <button class="go" id="vec-go" disabled>
+      <i class="ic" style="--ic:url(/static/img/ic-vector.png)"></i><span>Vektorisieren</span>
+    </button>
+    <div class="counter hidden" id="vec-count"></div>
+    <div class="results" id="vec-res"></div>
+  </div>
+
+  <!-- QR-CODES -->
+  <div class="card hidden" id="tab-qr">
+    <label>Inhalt <span class="opt">(URL oder Text)</span></label>
+    <textarea id="qr-text" style="min-height:62px" placeholder="https://avison-studios.de&#10;oder beliebiger Text …"></textarea>
+
+    <div class="row">
+      <div><label>Farbe</label><input type="color" id="qr-fg" value="#0d1b2a"></div>
+      <div><label>Hintergrund</label><input type="color" id="qr-bg" value="#ffffff"></div>
+    </div>
+    <div class="pills" id="qr-transp" style="margin-top:12px">
+      <div class="pill active" data-v="0">Hintergrund-Farbe</div>
+      <div class="pill" data-v="1">Transparent</div>
+    </div>
+
+    <div class="row" style="margin-top:16px">
+      <div>
+        <label>Stil</label>
+        <div class="pills" id="qr-style">
+          <div class="pill active" data-v="square">Eckig</div>
+          <div class="pill" data-v="round">Punkte</div>
+        </div>
+      </div>
+      <div>
+        <label>Format</label>
+        <div class="pills" id="qr-fmt">
+          <div class="pill active" data-v="png">PNG</div>
+          <div class="pill" data-v="svg">SVG</div>
+        </div>
+      </div>
+    </div>
+
+    <label>Größe <span class="opt">(Pixel, bei PNG)</span></label>
+    <select id="qr-size">
+      <option value="512">512 × 512</option>
+      <option value="1024" selected>1024 × 1024</option>
+      <option value="2048">2048 × 2048 · Druck</option>
+    </select>
+
+    <div class="qr-prevbox">
+      <div class="qr-prev">
+        <div class="ph" id="qr-empty">Vorschau erscheint hier,<br>sobald du etwas eingibst</div>
+        <img id="qr-img" class="hidden" alt="QR-Vorschau">
+      </div>
+    </div>
+
+    <button class="go" id="qr-go" disabled>
+      <i class="ic" style="--ic:url(/static/img/ic-qr.png)"></i><span>QR-Code speichern</span>
+    </button>
+    <div class="counter hidden" id="qr-count"></div>
+    <div class="results" id="qr-res"></div>
+  </div>
+
+  <!-- FARBEN -->
+  <div class="card hidden" id="tab-col">
+    <label>Farbe umrechnen <span class="opt">— HEX, RGB oder HSL eingeben, oder Picker nutzen</span></label>
+    <div class="row">
+      <div style="flex:0 0 86px"><input type="color" id="col-pick" value="#8fc8f8"></div>
+      <div><input type="text" id="col-in" class="mono" value="#8fc8f8" placeholder="#8fc8f8 · rgb(143,200,248) · hsl(207,88%,77%)"></div>
+    </div>
+    <div id="col-swatch"></div>
+    <div class="results" id="col-out"></div>
+
+    <label style="margin-top:26px">Kontrast-Check <span class="opt">(WCAG)</span></label>
+    <div class="row">
+      <div><label style="margin-top:0">Textfarbe</label><input type="color" id="ct-fg" value="#0d1b2a"></div>
+      <div><label style="margin-top:0">Hintergrund</label><input type="color" id="ct-bg" value="#e9f1f9"></div>
+    </div>
+    <div class="ct-sample" id="ct-sample">
+      <div class="big">Beispieltext — groß (22 px)</div>
+      <div class="small">Beispieltext — Fließtext (13 px). So liest sich die Kombination.</div>
+    </div>
+    <div class="ct-score" id="ct-score"></div>
+    <div class="hint">Normaler Text: <b>AA ab 4,5:1</b>, AAA ab 7:1.
+      Große Schrift (ab ~24 px): AA ab 3:1, AAA ab 4,5:1.</div>
+  </div>
+
+  <!-- ===================== Fussleiste ===================== -->
+  <div class="footer">
+    <div class="sp"></div>
+    <div class="toggle" id="btn-update" title="Nach Updates suchen">
+      <i class="ic" style="--ic:url(/static/img/ic-update.png)"></i><span>Updates</span>
+    </div>
+    <div class="toggle" id="btn-popups" title="Popup-Gadget an/aus">
+      <i class="ic" style="--ic:url(/static/img/ic-spark.png)"></i><span>Popups</span>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== Player ===================== -->
+<div class="plist hidden" id="plist"></div>
+<div class="player" id="player">
+  <img class="cover" src="/static/img/cover.jpg" alt="">
+  <div class="meta"><b id="pl-title">Keine Musik</b><span id="pl-artist"></span></div>
+  <div class="mid">
+    <div class="ctl">
+      <button class="pbtn" id="pl-shuffle" title="Zufällige Reihenfolge"><i class="ic" style="--ic:url(/static/img/ic-shuffle.png)"></i></button>
+      <button class="pbtn" id="pl-prev" title="Zurück"><i class="ic" style="--ic:url(/static/img/ic-prev.png)"></i></button>
+      <button class="pbtn orb" id="pl-play" title="Abspielen / Pause"><i class="ic" id="pl-play-ic" style="--ic:url(/static/img/ic-play.png)"></i></button>
+      <button class="pbtn" id="pl-next" title="Nächster Titel"><i class="ic" style="--ic:url(/static/img/ic-next.png)"></i></button>
+      <button class="pbtn" id="pl-list" title="Playlist"><i class="ic" style="--ic:url(/static/img/ic-note.png)"></i></button>
+    </div>
+    <div class="seek"><span id="pl-cur">0:00</span><input type="range" id="pl-seek" min="0" max="1000" value="0"><span id="pl-dur">0:00</span></div>
+  </div>
+  <div class="vol">
+    <button class="pbtn" id="pl-mute" title="Ton an/aus"><i class="ic" id="pl-mute-ic" style="--ic:url(/static/img/ic-sound.png)"></i></button>
+    <input type="range" id="pl-vol" min="0" max="100" value="30">
+  </div>
+</div>
+
+<!-- ===================== Update-Dialog ===================== -->
+<div id="upd-box" class="hidden">
+  <div class="card">
+    <h2 id="upd-title">Neue Version</h2>
+    <div class="hint" id="upd-sub" style="margin-top:0"></div>
+    <div class="notes hidden" id="upd-notes"></div>
+    <div class="bar hidden" id="upd-bar"><i></i></div>
+    <div class="btns">
+      <button class="ghost" id="upd-later">Später</button>
+      <button class="go leaf slim" id="upd-go">Jetzt aktualisieren</button>
+    </div>
+  </div>
+</div>
+
+<div id="lightbox" class="hidden"><img alt=""></div>
+<div id="toast"></div>
+
+<audio id="bgm" preload="auto"></audio>
+<div id="popup-layer"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+
+/* Symbol-Helfer: erzeugt eine eingefaerbte PNG-Maske aus static/img. */
+const ICO = n => `/static/img/ic-${n}.png`;
+const icon = (n, extra='') => `<i class="ic" style="--ic:url(${ICO(n)})${extra}"></i>`;
+
+/* ===================== Werkzeuge ===================== */
+const TOOLS = [
+  {id:'gen',  ic:'tanga',      name:'Tanga Generator', desc:'KI-Bilder lokal: FLUX.2, Z-Image & mehr'},
+  {id:'yt',   ic:'youtube',    name:'YouTube',       desc:'Video & Audio laden, auch Ausschnitte'},
+  {id:'file', ic:'convert',    name:'Konvertieren',  desc:'Bild · SVG · Audio · Video · PDF'},
+  {id:'comp', ic:'compress',   name:'Komprimieren',  desc:'Verkleinern oder als ZIP packen'},
+  {id:'tr',   ic:'transcript', name:'Transkript',    desc:'Whisper: Sprache → Text + SRT'},
+  {id:'bg',   ic:'cutout',     name:'Freisteller',   desc:'Hintergrund per KI entfernen'},
+  {id:'vec',  ic:'vector',     name:'Vektorisierer', desc:'PNG/JPG → skalierbares SVG'},
+  {id:'qr',   ic:'qr',         name:'QR-Codes',      desc:'Mit Farbe & Stil, PNG oder SVG'},
+  {id:'col',  ic:'colors',     name:'Farben',        desc:'HEX/RGB/HSL/OKLCH & Kontrast'},
+];
+const TOOL = Object.fromEntries(TOOLS.map(t=>[t.id,t]));
+const TOOLIMG = n => `/static/img/tool-${n}.png`;
+
+(function buildTiles(){
+  const box = $('#tiles');
+  for(const t of TOOLS){
+    const el = document.createElement('div');
+    el.className = 'tile';
+    el.style.setProperty('--i', box.children.length);
+    el.innerHTML = `<img src="${TOOLIMG(t.ic)}" alt="">
+      <div class="tx"><div class="nm">${t.name}</div><div class="ds">${t.desc}</div></div>`;
+    el.onclick = ()=>show(t.id);
+    box.appendChild(el);
+  }
+})();
+
+/* ===================== Navigation ===================== */
+function show(id){
+  const t = TOOL[id];
+  if(!t) id='home';
+  $('#home').classList.toggle('hidden', id!=='home');
+  $('#toolbar').classList.toggle('hidden', id==='home');
+  for(const x of TOOLS) $('#tab-'+x.id).classList.add('hidden');
+  if(t){
+    $('#tab-'+id).classList.remove('hidden');
+    $('#tt-ico').src = TOOLIMG(t.ic);
+    $('#tt-name').textContent = t.name;
+  } else {
+    loadRecent();
+  }
+  if(id==='gen' && window.genReady) genRefresh();
+  const want = id==='home' ? '' : '#'+id;
+  if(location.hash!==want) history.replaceState(null,'',want||location.pathname);
+  scrollTo({top:0});
+}
+$('#backbtn').onclick = ()=>show('home');
+window.addEventListener('hashchange',()=>show(location.hash.slice(1)||'home'));
+window.addEventListener('keydown',e=>{
+  if(e.key==='Escape' && !(e.target.closest && e.target.closest('input,textarea,select'))) show('home');
+});
+show(location.hash.slice(1)||'home');
+
+/* ===================== Ausgabe-Ordner + Meldungen ===================== */
+let toastTimer=null;
+function toast(msg){
+  const el=$('#toast'); el.textContent=msg; el.classList.add('show');
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),2200);
+}
+async function openFolder(sub){
+  try{
+    const r = await fetch('/api/open-folder',{method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({sub:sub||''})});
+    if(!r.ok) toast('Ordner nicht gefunden.');
+  }catch(e){ toast('Ordner konnte nicht geöffnet werden.'); }
+}
+$('#open-folder').onclick = ()=>openFolder();
+
+/* ===================== Zuletzt erstellte Dateien ===================== */
+const CAT_ICON = {YouTube:'youtube',Konvertiert:'convert',Komprimiert:'compress',
+  Transkripte:'transcript',Freigestellt:'cutout',Vektoren:'vector','QR-Codes':'qr','Tanga Generator':'tanga'};
+
+function fmtSize(b){
+  if(b>=1073741824) return (b/1073741824).toFixed(1)+' GB';
+  if(b>=1048576) return (b/1048576).toFixed(1)+' MB';
+  if(b>=1024) return (b/1024).toFixed(0)+' KB';
+  return b+' B';
+}
+function fmtAgo(sec){
+  if(sec<90) return 'gerade eben';
+  if(sec<5400) return 'vor '+Math.round(sec/60)+' Min.';
+  if(sec<172800) return 'vor '+Math.round(sec/3600)+' Std.';
+  return 'vor '+Math.round(sec/86400)+' Tagen';
+}
+
+async function loadRecent(){
+  let d;
+  try{ const r=await fetch('/api/stats'); d=await r.json(); }catch(e){ return; }
+  $('#st-size').textContent = d.total ? `${d.total} Dateien · ${fmtSize(d.bytes)}` : '';
+  const rec = $('#st-recent');
+  if(!d.recent.length){
+    rec.innerHTML = '<div class="empty">Noch nichts erstellt.</div>';
+    return;
+  }
+  rec.innerHTML = '';
+  for(const f of d.recent){
+    const row=document.createElement('div'); row.className='fl';
+    row.style.setProperty('--i', rec.children.length);
+    row.innerHTML = `<img src="${TOOLIMG(CAT_ICON[f.dir]||'folder')}" alt=""><span class="nm">${f.name}</span>
+      <span class="mt">${fmtAgo(f.age)}</span>`;
+    row.title = f.dir+' · '+fmtSize(f.size)+' — im Ordner zeigen';
+    row.onclick = ()=>revealFile(f.dir+'/'+f.file);
+    rec.appendChild(row);
+  }
+}
+async function revealFile(rel){
+  try{
+    const r = await fetch('/api/reveal',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({file:rel})});
+    if(!r.ok) toast('Datei nicht gefunden.');
+  }catch(e){}
+}
+loadRecent();
+
+const loadStats = loadRecent;
+
+/* ===================== gemeinsame Bausteine ===================== */
+function wirePills(sel, cb){
+  const root=$(sel);
+  root.querySelectorAll('.pill').forEach(p=>p.onclick=()=>{
+    root.querySelectorAll('.pill').forEach(x=>x.classList.remove('active'));
+    p.classList.add('active'); cb(p.dataset.v);
+  });
+}
+function wireDrop(dropSel, inputSel, apply){
+  const drop=$(dropSel), input=$(inputSel);
+  drop.onclick=()=>input.click();
+  input.onchange=()=>apply([...input.files]);
+  ['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hover');}));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hover');}));
+  drop.addEventListener('drop',e=>apply([...e.dataTransfer.files]));
+}
+function dropLabel(list, leer){
+  return list.length ? (list.length===1 ? list[0].name : `${list.length} Dateien ausgewählt`)
+                     : (leer || 'Dateien hierher ziehen oder klicken');
+}
+
+/* Im Fenster-Programm (pywebview) laedt ein <a download> nicht herunter — die Datei
+   liegt ohnehin schon im Ausgabe-Ordner. Darum dort "Im Ordner zeigen" anbieten. */
+const isDesktop = () => !!window.pywebview;
+function fileAction(link, label){
+  const rel = String(link||'').replace(/^\/download\//,'');
+  if(isDesktop())
+    return `<span class="act" data-rev="${rel}">${icon('folder')}<span>${label||'Im Ordner'}</span></span>`;
+  return `<a href="${link}">${icon('save')}<span>${label||'Speichern'}</span></a>`;
+}
+document.addEventListener('click', async e=>{
+  const el = e.target.closest('[data-rev]');
+  if(!el) return;
+  e.preventDefault(); e.stopPropagation();
+  try{
+    await fetch('/api/reveal',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({file:el.dataset.rev})});
+  }catch(err){}
+});
+
+function addRow(container, label){
+  const row=document.createElement('div');
+  row.className='res';
+  row.innerHTML=`<div class="spin"></div><div class="name">${label}</div>`;
+  container.appendChild(row);
+  return row;
+}
+function setRow(row, ok, name, link){
+  row.className='res '+(ok?'ok':'err');
+  row.innerHTML = ok
+    ? `${icon('check')}<div class="name">${name}</div>${fileAction(link)}`
+    : `${icon('warn')}<div class="name">${name}</div>`;
+  if(!ok){
+    row.title='Klicken: Fehlermeldung kopieren';
+    row.onclick=()=>copyText(row, name);
+  } else { row.title=''; row.onclick=null; }
+}
+async function copyText(row, text){
+  try{ await navigator.clipboard.writeText(text); }
+  catch(e){
+    const ta=document.createElement('textarea'); ta.value=text;
+    ta.style.cssText='position:fixed;opacity:0';
+    document.body.appendChild(ta); ta.select();
+    try{ document.execCommand('copy'); }catch(_){}
+    ta.remove();
+  }
+  if(row.querySelector('.copybadge')) return;
+  const b=document.createElement('span'); b.className='copybadge'; b.textContent='Kopiert';
+  row.appendChild(b);
+  setTimeout(()=>b.remove(), 1600);
+}
+
+async function runFileBatch({files, btnSel, resSel, cntSel, endpoint, fill, verb}){
+  if(!files.length) return;
+  const res=$(resSel), cnt=$(cntSel), btn=$(btnSel);
+  res.innerHTML=''; cnt.classList.remove('hidden'); btn.disabled=true;
+  let done=0;
+  for(const file of files){
+    const row=addRow(res, file.name);
+    cnt.textContent=`${verb} ${done+1} / ${files.length} …`;
+    const fd=new FormData(); fd.append('file',file); fill(fd);
+    try{
+      const r=await fetch(endpoint,{method:'POST',body:fd});
+      const d=await r.json();
+      if(r.ok) setRow(row,true,d.file,d.download);
+      else setRow(row,false,(d.error||'Fehler')+' — '+file.name);
+    }catch(e){ setRow(row,false,e.message+' — '+file.name); }
+    done++;
+  }
+  cnt.textContent=`Fertig: ${done} / ${files.length}`;
+  btn.disabled=false;
+  loadStats();
+}
+
+/* ===================== YouTube ===================== */
+let ytFmt='mp3';
+wirePills('#yt-formats', v=>ytFmt=v);
+
+$('#yt-go').onclick = async ()=>{
+  const links = $('#yt-url').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  const res=$('#yt-res'), cnt=$('#yt-count');
+  res.innerHTML=''; cnt.classList.remove('hidden');
+  if(!links.length){ cnt.textContent='Bitte mindestens einen Link eingeben.'; return; }
+  $('#yt-go').disabled=true;
+  let done=0;
+  for(const url of links){
+    const short = url.length>54 ? url.slice(0,54)+'…' : url;
+    const row=addRow(res, short);
+    cnt.textContent=`Lade ${done+1} / ${links.length} …`;
+    try{
+      const r=await fetch('/api/youtube',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({url,format:ytFmt,bitrate:$('#yt-bitrate').value,
+          start:$('#yt-start').value,end:$('#yt-end').value})});
+      const d=await r.json();
+      if(r.ok) setRow(row,true,d.file,d.download);
+      else setRow(row,false,(d.error||'Fehler')+' — '+short);
+    }catch(e){ setRow(row,false,e.message+' — '+short); }
+    done++;
+  }
+  cnt.textContent=`Fertig: ${done} / ${links.length}`;
+  $('#yt-go').disabled=false;
+  loadStats();
+};
+
+/* ===================== Konvertieren ===================== */
+let chosen=[];
+wireDrop('#drop','#file-input',list=>{
+  chosen=list;
+  $('#drop-text').textContent=dropLabel(list);
+  $('#file-go').disabled=!list.length;
+});
+$('#file-go').onclick = ()=>runFileBatch({
+  files:chosen, btnSel:'#file-go', resSel:'#file-res', cntSel:'#file-count',
+  endpoint:'/api/convert', verb:'Konvertiere',
+  fill:fd=>{ fd.append('target',$('#file-target').value); fd.append('bitrate',$('#file-bitrate').value); },
+});
+
+/* ===================== Komprimieren ===================== */
+let compMode='shrink', compLevel='medium', cchosen=[];
+
+wirePills('#comp-mode', v=>{
+  compMode=v;
+  $('#shrink-opts').classList.toggle('hidden', compMode!=='shrink');
+  $('#zip-opts').classList.toggle('hidden', compMode!=='zip');
+  $('#comp-go').querySelector('span').textContent = compMode==='zip' ? 'ZIP erstellen' : 'Komprimieren';
+});
+wirePills('#comp-level', v=>compLevel=v);
+wireDrop('#cdrop','#cfile-input',list=>{
+  cchosen=list;
+  $('#cdrop-text').textContent=dropLabel(list);
+  $('#comp-go').disabled=!list.length;
+});
+
+function compDone(row, d){
+  const saved = d.orig_size>0 ? Math.round((1 - d.new_size/d.orig_size)*100) : 0;
+  const savTxt = saved>0 ? `−${saved} %` : '±0 %';
+  const nice = d.file.replace(/^[0-9a-f]{8}_/,'');
+  row.className='res ok';
+  row.innerHTML=`${icon('check')}
+    <div class="name">${nice}<small>${fmtSize(d.orig_size)} → ${fmtSize(d.new_size)} · ${savTxt}</small></div>
+    ${fileAction(d.download)}`;
+}
+$('#comp-go').onclick = async ()=>{
+  if(!cchosen.length) return;
+  const res=$('#comp-res'), cnt=$('#comp-count');
+  res.innerHTML=''; cnt.classList.remove('hidden'); $('#comp-go').disabled=true;
+  if(compMode==='zip'){
+    const row=addRow(res, `${cchosen.length} Datei(en) → ZIP`);
+    cnt.textContent='Packe ZIP …';
+    const fd=new FormData(); for(const f of cchosen) fd.append('files', f);
+    try{
+      const r=await fetch('/api/zip',{method:'POST',body:fd}); const d=await r.json();
+      if(r.ok) compDone(row,d); else setRow(row,false,(d.error||'Fehler'));
+    }catch(e){ setRow(row,false,e.message); }
+    cnt.textContent='Fertig.';
+  } else {
+    let done=0;
+    for(const file of cchosen){
+      const row=addRow(res, file.name);
+      cnt.textContent=`Komprimiere ${done+1} / ${cchosen.length} …`;
+      const fd=new FormData(); fd.append('file',file); fd.append('level',compLevel);
+      try{
+        const r=await fetch('/api/compress',{method:'POST',body:fd}); const d=await r.json();
+        if(r.ok) compDone(row,d); else setRow(row,false,(d.error||'Fehler')+' — '+file.name);
+      }catch(e){ setRow(row,false,e.message+' — '+file.name); }
+      done++;
+    }
+    cnt.textContent=`Fertig: ${cchosen.length} Datei(en)`;
+  }
+  $('#comp-go').disabled=false;
+  loadStats();
+};
+
+/* ===================== Transkript ===================== */
+let tchosen=[], trKeep='1';
+wireDrop('#tdrop','#tfile-input',list=>{
+  tchosen=list;
+  $('#tdrop-text').textContent=dropLabel(list);
+});
+wirePills('#tr-keep', v=>trKeep=v);
+
+const TR_PHASE={wartet:'wartet', download:'Download läuft', warten:'wartet auf Transkription',
+  audio:'Audio wird extrahiert', modell:'Whisper-Modell wird geladen', transkription:'Transkription'};
+
+$('#tr-go').onclick = async ()=>{
+  const urls=$('#tr-url').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  const res=$('#tr-res'), cnt=$('#tr-count');
+  cnt.classList.remove('hidden');
+  if(!urls.length && !tchosen.length){ cnt.textContent='Bitte Links eingeben oder Dateien wählen.'; return; }
+  $('#tr-go').disabled=true; res.innerHTML=''; cnt.textContent='Starte …';
+
+  const fd=new FormData();
+  fd.append('urls', urls.join('\n'));
+  fd.append('model', $('#tr-model').value);
+  fd.append('language', $('#tr-lang').value);
+  fd.append('referer', $('#tr-referer').value.trim());
+  fd.append('keep_video', trKeep);
+  for(const f of tchosen) fd.append('files', f);
+
+  let jobs;
+  try{
+    const r=await fetch('/api/transcribe',{method:'POST',body:fd});
+    const d=await r.json();
+    if(!r.ok){ cnt.textContent=d.error||'Fehler'; $('#tr-go').disabled=false; return; }
+    jobs=d.jobs;
+  }catch(e){ cnt.textContent=e.message; $('#tr-go').disabled=false; return; }
+
+  const rows={};
+  for(const j of jobs) rows[j.id]=addRow(res, j.label);
+  const ids=jobs.map(j=>j.id).join(',');
+
+  while(true){
+    await new Promise(r=>setTimeout(r,1500));
+    let d;
+    try{ const r=await fetch('/api/transcribe/status?ids='+ids); d=await r.json(); }
+    catch(e){ continue; }
+    let open=0, done=0;
+    for(const j of jobs){
+      const st=d.jobs[j.id], row=rows[j.id];
+      if(!st || !row) continue;
+      if(st.phase==='fertig'){
+        done++;
+        if(!row.dataset.done){
+          row.dataset.done='1'; row.className='res ok';
+          const links=(st.files||[]).map(f=>fileAction(f.download, f.kind)).join('');
+          row.innerHTML=`${icon('check')}<div class="name">${st.label}</div>${links}`;
+        }
+      } else if(st.phase==='fehler'){
+        if(!row.dataset.done){ row.dataset.done='1'; setRow(row,false,(st.error||'Fehler')+' — '+st.label); }
+      } else {
+        open++;
+        const pct=st.progress?` · ${st.progress} %`:'';
+        const dev=st.device?` · ${st.device}`:'';
+        row.querySelector('.name').textContent=`${st.label} — ${TR_PHASE[st.phase]||st.phase}${pct}${dev}`;
+      }
+    }
+    cnt.textContent = open ? `Läuft … ${done} / ${jobs.length} fertig` : `Fertig: ${done} / ${jobs.length}`;
+    if(!open) break;
+  }
+  $('#tr-go').disabled=false;
+  loadStats();
+};
+
+/* ===================== Freisteller ===================== */
+let bchosen=[], bgMode='transparent';
+wireDrop('#bdrop','#bfile-input',list=>{
+  bchosen=list;
+  $('#bdrop-text').textContent=dropLabel(list,'Bilder hierher ziehen oder klicken');
+  $('#bg-go').disabled=!list.length;
+});
+wirePills('#bg-mode', v=>bgMode=v);
+$('#bg-go').onclick = ()=>runFileBatch({
+  files:bchosen, btnSel:'#bg-go', resSel:'#bg-res', cntSel:'#bg-count',
+  endpoint:'/api/removebg', verb:'Stelle frei',
+  fill:fd=>fd.append('bg',bgMode),
+});
+
+/* ===================== Vektorisierer ===================== */
+let vchosen=[], vecMode='color', vecDetail='normal';
+wireDrop('#vdrop','#vfile-input',list=>{
+  vchosen=list;
+  $('#vdrop-text').textContent=dropLabel(list,'Bilder hierher ziehen oder klicken');
+  $('#vec-go').disabled=!list.length;
+});
+wirePills('#vec-mode', v=>vecMode=v);
+wirePills('#vec-detail', v=>vecDetail=v);
+$('#vec-go').onclick = ()=>runFileBatch({
+  files:vchosen, btnSel:'#vec-go', resSel:'#vec-res', cntSel:'#vec-count',
+  endpoint:'/api/vectorize', verb:'Vektorisiere',
+  fill:fd=>{ fd.append('mode',vecMode); fd.append('detail',vecDetail); },
+});
+
+/* ===================== QR-Codes ===================== */
+let qrStyle='square', qrTransp=false, qrFmt='png', qrTimer=null;
+
+function qrPayload(preview){
+  return {text:$('#qr-text').value.trim(), fg:$('#qr-fg').value, bg:$('#qr-bg').value,
+          transparent:qrTransp, style:qrStyle, format:qrFmt,
+          size:parseInt($('#qr-size').value,10), preview:preview?1:0};
+}
+async function qrPreview(){
+  const text=$('#qr-text').value.trim();
+  $('#qr-empty').classList.toggle('hidden', !!text);
+  $('#qr-img').classList.toggle('hidden', !text);
+  $('#qr-go').disabled=!text;
+  if(!text) return;
+  try{
+    const r=await fetch('/api/qr',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(qrPayload(true))});
+    if(!r.ok) return;
+    const img=$('#qr-img');
+    const u=URL.createObjectURL(await r.blob());
+    if(img.dataset.u) URL.revokeObjectURL(img.dataset.u);
+    img.src=u; img.dataset.u=u;
+  }catch(e){}
+}
+function qrChanged(){ clearTimeout(qrTimer); qrTimer=setTimeout(qrPreview,250); }
+
+$('#qr-text').addEventListener('input', qrChanged);
+$('#qr-fg').addEventListener('input', qrChanged);
+$('#qr-bg').addEventListener('input', qrChanged);
+wirePills('#qr-style', v=>{ qrStyle=v; qrChanged(); });
+wirePills('#qr-fmt',   v=>{ qrFmt=v; });
+wirePills('#qr-transp',v=>{
+  qrTransp = v==='1';
+  $('#qr-bg').classList.toggle('dim', qrTransp);
+  qrChanged();
+});
+
+$('#qr-go').onclick = async ()=>{
+  const res=$('#qr-res'), cnt=$('#qr-count');
+  cnt.classList.remove('hidden'); cnt.textContent='Erzeuge QR-Code …';
+  $('#qr-go').disabled=true;
+  const row=addRow(res, 'QR-Code ('+qrFmt.toUpperCase()+')');
+  try{
+    const r=await fetch('/api/qr',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(qrPayload(false))});
+    const d=await r.json();
+    if(r.ok) setRow(row,true,d.file,d.download);
+    else setRow(row,false,d.error||'Fehler');
+  }catch(e){ setRow(row,false,e.message); }
+  cnt.textContent='Fertig.';
+  $('#qr-go').disabled=false;
+  loadStats();
+};
+
+/* ===================== Farben ===================== */
+function parseColor(str){
+  str=(str||'').trim(); if(!str) return null;
+  const ctx=document.createElement('canvas').getContext('2d');
+  ctx.fillStyle='#000000'; ctx.fillStyle=str; const a=ctx.fillStyle;
+  ctx.fillStyle='#ffffff'; ctx.fillStyle=str; const b=ctx.fillStyle;
+  if(a!==b) return null;
+  let m=a.match(/^#([0-9a-f]{6})$/i);
+  if(m){ const h=m[1]; return {r:parseInt(h.slice(0,2),16), g:parseInt(h.slice(2,4),16), b:parseInt(h.slice(4,6),16)}; }
+  m=a.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+  if(m) return {r:+m[1], g:+m[2], b:+m[3]};
+  return null;
+}
+const hex2=v=>v.toString(16).padStart(2,'0');
+function rgbToHex(c){ return ('#'+hex2(c.r)+hex2(c.g)+hex2(c.b)).toUpperCase(); }
+function rgbToHsl({r,g,b}){
+  r/=255;g/=255;b/=255;
+  const max=Math.max(r,g,b),min=Math.min(r,g,b),l=(max+min)/2;
+  let h=0,s=0;
+  if(max!==min){
+    const d=max-min;
+    s=l>0.5? d/(2-max-min) : d/(max+min);
+    if(max===r) h=(g-b)/d+(g<b?6:0);
+    else if(max===g) h=(b-r)/d+2;
+    else h=(r-g)/d+4;
+    h*=60;
+  }
+  return {h:Math.round(h), s:Math.round(s*100), l:Math.round(l*100)};
+}
+const srgbLin=c=>{ c/=255; return c<=0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055,2.4); };
+function rgbToOklch({r,g,b}){
+  const R=srgbLin(r),G=srgbLin(g),B=srgbLin(b);
+  const l=Math.cbrt(0.4122214708*R+0.5363325363*G+0.0514459929*B);
+  const m=Math.cbrt(0.2119034982*R+0.6806995451*G+0.1073969566*B);
+  const s=Math.cbrt(0.0883024619*R+0.2817188376*G+0.6299787005*B);
+  const L=0.2104542553*l+0.7936177850*m-0.0040720468*s;
+  const A=1.9779984951*l-2.4285922050*m+0.4505937099*s;
+  const Bb=0.0259040371*l+0.7827717662*m-0.8086757660*s;
+  const C=Math.sqrt(A*A+Bb*Bb);
+  let H=Math.atan2(Bb,A)*180/Math.PI; if(H<0) H+=360;
+  return {l:(L*100).toFixed(1), c:C.toFixed(3), h:C<0.001?0:H.toFixed(1)};
+}
+function luminance({r,g,b}){ return 0.2126*srgbLin(r)+0.7152*srgbLin(g)+0.0722*srgbLin(b); }
+function contrast(c1,c2){
+  const L1=luminance(c1), L2=luminance(c2);
+  const hi=Math.max(L1,L2), lo=Math.min(L1,L2);
+  return (hi+0.05)/(lo+0.05);
+}
+
+function renderColor(c){
+  $('#col-swatch').style.background=rgbToHex(c);
+  const hsl=rgbToHsl(c), ok=rgbToOklch(c);
+  const fmts=[
+    ['HEX',  rgbToHex(c)],
+    ['RGB',  `rgb(${c.r}, ${c.g}, ${c.b})`],
+    ['HSL',  `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`],
+    ['OKLCH',`oklch(${ok.l}% ${ok.c} ${ok.h})`],
+  ];
+  const out=$('#col-out'); out.innerHTML='';
+  for(const [label,val] of fmts){
+    const row=document.createElement('div'); row.className='res';
+    row.style.cursor='pointer'; row.title='Klicken: kopieren';
+    row.innerHTML=`<span class="fmtlabel">${label}</span><div class="name mono">${val}</div>
+      <span class="act">${icon('copy')}<span>Kopieren</span></span>`;
+    row.onclick=()=>copyText(row,val);
+    out.appendChild(row);
+  }
+}
+function colFromText(){
+  const c=parseColor($('#col-in').value);
+  $('#col-in').style.borderColor = c?'':'var(--err)';
+  if(!c) return;
+  $('#col-pick').value=rgbToHex(c).toLowerCase();
+  renderColor(c);
+}
+$('#col-in').addEventListener('input', colFromText);
+$('#col-pick').addEventListener('input', ()=>{
+  $('#col-in').value=$('#col-pick').value;
+  $('#col-in').style.borderColor='';
+  renderColor(parseColor($('#col-pick').value));
+});
+renderColor(parseColor($('#col-in').value));
+
+function renderContrast(){
+  const fg=parseColor($('#ct-fg').value), bg=parseColor($('#ct-bg').value);
+  if(!fg||!bg) return;
+  const sample=$('#ct-sample');
+  sample.style.color=rgbToHex(fg); sample.style.background=rgbToHex(bg);
+  const ratio=contrast(fg,bg), r2=Math.round(ratio*100)/100;
+  const badge=(name,need)=>{
+    const ok=ratio>=need;
+    return `<span class="badge ${ok?'pass':'fail'}">${icon(ok?'check':'warn')}<span>${name}</span></span>`;
+  };
+  $('#ct-score').innerHTML=
+    `<span class="ct-ratio">${r2.toFixed(2).replace('.',',')} : 1</span>`+
+    badge('AA',4.5)+badge('AAA',7)+badge('AA groß',3)+badge('AAA groß',4.5);
+}
+$('#ct-fg').addEventListener('input', renderContrast);
+$('#ct-bg').addEventListener('input', renderContrast);
+renderContrast();
+
+/* ===================== Popup-Gadget ===================== */
+(()=>{
+  const LS = window.localStorage;
+  const layer = $('#popup-layer');
+  const btnPopups = $('#btn-popups');
+  let popupsOn = LS.getItem('av_popups') !== 'off';
+
+  // kurzer Ton beim Wegklicken eines Popups
+  let actx=null;
+  function audioCtx(){
+    if(!actx){ try{ actx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+    if(actx&&actx.state==='suspended') actx.resume();
+    return actx;
+  }
+  function popSound(){
+    const ac=audioCtx(); if(!ac) return;
+    const t=ac.currentTime;
+    const o=ac.createOscillator(), g=ac.createGain();
+    o.type='sine'; o.frequency.setValueAtTime(420,t); o.frequency.exponentialRampToValueAtTime(1300,t+0.12);
+    g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.4,t+0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.22);
+    o.connect(g).connect(ac.destination); o.start(t); o.stop(t+0.24);
+  }
+
+  let imgs=[];
+  const live=[];
+  const MAX_LIVE=5;
+  let popupTimer=null, rafId=null;
+
+  fetch('/api/popups').then(r=>r.json()).then(d=>{ imgs=d.images||[]; }).catch(()=>{});
+
+  function spawnPopup(){
+    if(!popupsOn || !imgs.length || live.length>=MAX_LIVE) return;
+    const url = imgs[Math.floor(Math.random()*imgs.length)];
+    const el = document.createElement('div');
+    el.className='popup';
+    const im = new Image();
+    im.onload=()=>{
+      if(!popupsOn){ el.remove(); return; }
+      const ar = im.naturalWidth/im.naturalHeight || 1.6;
+      const w = 150 + Math.random()*90;
+      const h = w/ar;
+      const x = Math.random()*Math.max(10,(innerWidth - w));
+      const y = Math.random()*Math.max(10,(innerHeight - h));
+      const sp = 0.6 + Math.random()*0.9;
+      const ang = Math.random()*Math.PI*2;
+      const p = {el, x, y, vx:Math.cos(ang)*sp*60, vy:Math.sin(ang)*sp*60, w, h};
+      el.style.width=w+'px'; el.style.height=h+'px';
+      el.style.transform=`translate(${x}px,${y}px)`;
+      el.onclick=()=>dismiss(p);
+      live.push(p);
+    };
+    im.src=url; el.appendChild(im); layer.appendChild(el);
+  }
+
+  function dismiss(p){
+    popSound();
+    p.el.classList.add('bye');
+    const i=live.indexOf(p); if(i>=0) live.splice(i,1);
+    setTimeout(()=>p.el.remove(), 260);
+  }
+
+  let lastT=performance.now();
+  function tick(now){
+    const dt=Math.min(0.05,(now-lastT)/1000); lastT=now;
+    for(const p of live){
+      p.x+=p.vx*dt; p.y+=p.vy*dt;
+      if(p.x<=0){p.x=0;p.vx=Math.abs(p.vx);} else if(p.x+p.w>=innerWidth){p.x=innerWidth-p.w;p.vx=-Math.abs(p.vx);}
+      if(p.y<=0){p.y=0;p.vy=Math.abs(p.vy);} else if(p.y+p.h>=innerHeight){p.y=innerHeight-p.h;p.vy=-Math.abs(p.vy);}
+      p.el.style.transform=`translate(${p.x}px,${p.y}px)`;
+    }
+    rafId=requestAnimationFrame(tick);
+  }
+
+  function scheduleNext(){
+    clearTimeout(popupTimer);
+    const wait = 8000 + Math.random()*18000;
+    popupTimer=setTimeout(()=>{ spawnPopup(); scheduleNext(); }, wait);
+  }
+
+  function startPopups(){
+    if(!rafId){ lastT=performance.now(); rafId=requestAnimationFrame(tick); }
+    scheduleNext(); setTimeout(spawnPopup, 2500);
+  }
+  function stopPopups(){
+    clearTimeout(popupTimer);
+    while(live.length) dismissNoSound(live[0]);
+    layer.innerHTML='';
+  }
+  function dismissNoSound(p){ const i=live.indexOf(p); if(i>=0) live.splice(i,1); p.el.remove(); }
+
+  function syncPopupBtn(){
+    btnPopups.classList.toggle('off', !popupsOn);
+    btnPopups.title = popupsOn ? 'Popup-Gadget: an' : 'Popup-Gadget: aus';
+  }
+  btnPopups.onclick = ()=>{
+    popupsOn=!popupsOn; LS.setItem('av_popups', popupsOn?'on':'off'); syncPopupBtn();
+    if(popupsOn) startPopups(); else stopPopups();
+  };
+  syncPopupBtn();
+  if(popupsOn) startPopups();
+})();
+
+/* ===================== Player + Playlist ===================== */
+(()=>{
+  const LS = window.localStorage;
+  const bgm = $('#bgm'), seek = $('#pl-seek'), vol = $('#pl-vol');
+  let tracks = [], order = [], pos = 0;
+  let wantPlay = LS.getItem('av_music') === 'on';
+  let shuffle = LS.getItem('av_shuffle') !== 'off';
+  let lastVol = 30;
+
+  const fmtT = s => isFinite(s) ? Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0') : '0:00';
+  const fill = el => el.style.setProperty('--v', ((el.value-el.min)*100/(el.max-el.min))+'%');
+
+  function makeOrder(keepId){
+    order = tracks.map((_,i)=>i);
+    if(shuffle){
+      for(let i=order.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [order[i],order[j]]=[order[j],order[i]]; }
+    }
+    pos = Math.max(0, order.indexOf(keepId));
+    if(shuffle && keepId!=null){ [order[0],order[pos]]=[order[pos],order[0]]; pos=0; }
+  }
+  function load(p, autoplay){
+    if(!tracks.length) return;
+    pos = (p+order.length)%order.length;
+    const t = tracks[order[pos]];
+    bgm.src = t.url;
+    const meta = $('#player .meta'); meta.classList.add('swap');
+    setTimeout(()=>{ $('#pl-title').textContent = t.title;
+      $('#pl-artist').textContent = t.artist || 'Aviens Toolbox'; meta.classList.remove('swap'); }, 220);
+    LS.setItem('av_track', t.file);
+    renderList();
+    if(autoplay) bgm.play().catch(()=>{});
+  }
+  function syncPlay(){
+    $('#pl-play-ic').style.setProperty('--ic', `url(${ICO(bgm.paused?'play':'pause')})`);
+    $('#player').classList.toggle('playing', !bgm.paused);
+    $('#plist').classList.toggle('paused', bgm.paused);
+  }
+  function renderList(){
+    const box = $('#plist');
+    if(!tracks.length){
+      box.innerHTML = `<div class="hd">Playlist</div><div class="ft">Noch keine Titel. Lege MP3-Dateien in den Ordner
+        <b>music</b> neben dem Programm — Dateiname: Künstler - Titel.mp3</div>`;
+      return;
+    }
+    box.innerHTML = `<div class="hd">Playlist · ${tracks.length} Titel</div>`;
+    tracks.forEach((t,i)=>{
+      const row = document.createElement('div');
+      row.className = 'tr'+(i===order[pos]?' now':'');
+      row.innerHTML = `<span class="n">${i===order[pos]?'<span class="eq"><i></i><i></i><i></i></span>':i+1}</span><span class="t">${t.title}<small>${t.artist||''}</small></span>`;
+      row.onclick = ()=>{ wantPlay=true; LS.setItem('av_music','on'); load(order.indexOf(i), true); };
+      box.appendChild(row);
+    });
+    const ft = document.createElement('div'); ft.className='ft';
+    ft.textContent = 'Eigene Musik: MP3s in den Ordner "music" neben dem Programm legen.';
+    box.appendChild(ft);
+  }
+
+  $('#pl-play').onclick = ()=>{
+    if(!tracks.length){ toast('Keine Musik gefunden.'); return; }
+    if(bgm.paused){ wantPlay=true; bgm.play().catch(()=>{}); } else { wantPlay=false; bgm.pause(); }
+    LS.setItem('av_music', wantPlay?'on':'off');
+  };
+  $('#pl-next').onclick = ()=>load(pos+1, !bgm.paused || wantPlay);
+  $('#pl-prev').onclick = ()=>{
+    if(bgm.currentTime>3){ bgm.currentTime=0; return; }
+    load(pos-1, !bgm.paused || wantPlay);
+  };
+  $('#pl-shuffle').onclick = ()=>{
+    shuffle=!shuffle; LS.setItem('av_shuffle', shuffle?'on':'off');
+    $('#pl-shuffle').classList.toggle('on', shuffle);
+    makeOrder(order[pos]); renderList();
+  };
+  $('#pl-list').onclick = e=>{ e.stopPropagation(); $('#plist').classList.toggle('hidden'); };
+  document.addEventListener('click', e=>{
+    if(!e.target.closest('#plist')) $('#plist').classList.add('hidden');
+  });
+
+  bgm.addEventListener('play', syncPlay);
+  bgm.addEventListener('pause', syncPlay);
+  bgm.addEventListener('ended', ()=>load(pos+1, true));
+  bgm.addEventListener('error', ()=>{ if(tracks.length>1) load(pos+1, wantPlay); });
+  bgm.addEventListener('timeupdate', ()=>{
+    if(seek.dataset.drag) return;
+    seek.value = bgm.duration ? Math.round(bgm.currentTime*1000/bgm.duration) : 0; fill(seek);
+    $('#pl-cur').textContent = fmtT(bgm.currentTime);
+    $('#pl-dur').textContent = fmtT(bgm.duration);
+  });
+  seek.addEventListener('input', ()=>{ seek.dataset.drag='1'; fill(seek); });
+  seek.addEventListener('change', ()=>{
+    if(bgm.duration) bgm.currentTime = seek.value/1000*bgm.duration;
+    delete seek.dataset.drag;
+  });
+
+  function setVol(v){
+    vol.value=v; fill(vol); bgm.volume=v/100; LS.setItem('av_vol', v);
+    $('#pl-mute-ic').style.setProperty('--ic', `url(${ICO(v>0?'sound':'mute')})`);
+  }
+  vol.addEventListener('input', ()=>setVol(+vol.value));
+  $('#pl-mute').onclick = ()=>{
+    if(+vol.value>0){ lastVol=+vol.value; setVol(0); } else setVol(lastVol||30);
+  };
+  setVol(+(LS.getItem('av_vol') ?? 30));
+  $('#pl-shuffle').classList.toggle('on', shuffle);
+  fill(seek);
+
+  // Browser erlauben Ton erst nach der ersten Eingabe
+  let unlocked=false;
+  function unlock(){ if(unlocked) return; unlocked=true; if(wantPlay && bgm.paused) bgm.play().catch(()=>{}); }
+  window.addEventListener('pointerdown', unlock);
+  window.addEventListener('keydown', unlock);
+
+  fetch('/api/playlist').then(r=>r.json()).then(d=>{
+    tracks = d.tracks||[];
+    const last = tracks.findIndex(t=>t.file===LS.getItem('av_track'));
+    makeOrder(shuffle || last<0 ? null : last);
+    if(shuffle && tracks.length) pos = Math.floor(Math.random()*order.length);
+    load(pos, wantPlay);
+    renderList();
+  }).catch(()=>renderList());
+})();
+
+/* ===================== Auto-Updater ===================== */
+(()=>{
+  let info=null, timer=null;
+  const box=$('#upd-box'), bar=$('#upd-bar'), go=$('#upd-go');
+
+  function openBox(){
+    if(!info) return;
+    $('#upd-title').textContent = `Version ${info.latest} ist da`;
+    $('#upd-sub').textContent = info.needs_installer
+      ? `Du hast ${info.current}. Diese Version braucht einmalig den neuen Installer.`
+      : `Du hast ${info.current}. Das Update lädt nur die geänderten Dateien.`;
+    const yt = info.latest_ytdlp && info.latest_ytdlp!==info.ytdlp
+      ? `Neuer YouTube-Downloader: ${info.latest_ytdlp} (bisher ${info.ytdlp}).` : '';
+    const notes = [info.notes, yt].filter(Boolean).join('\n');
+    $('#upd-notes').textContent = notes;
+    $('#upd-notes').classList.toggle('hidden', !notes);
+    go.textContent = info.needs_installer ? 'Installer laden' : 'Jetzt aktualisieren';
+    go.disabled = false; go.dataset.mode = info.needs_installer ? 'installer' : 'apply';
+    bar.classList.add('hidden');
+    box.classList.remove('hidden');
+  }
+  async function check(manual){
+    let d;
+    try{ d = await (await fetch('/api/update/check')).json(); }
+    catch(e){ if(manual) toast('Update-Prüfung fehlgeschlagen.'); return; }
+    if(d.available){
+      info=d; $('#upd-btn').classList.remove('hidden');
+      if(manual || localStorage.getItem('av_upd_seen')!==d.latest){
+        localStorage.setItem('av_upd_seen', d.latest); openBox();
+      }
+    } else if(manual){
+      toast(d.configured===false ? 'Kein Update-Kanal eingerichtet.'
+          : d.error ? 'Update-Server nicht erreichbar.' : `Alles aktuell (v${d.current}).`);
+    }
+  }
+  async function poll(){
+    let st;
+    try{ st = await (await fetch('/api/update/status')).json(); }catch(e){ return; }
+    bar.firstElementChild.style.width = st.progress+'%';
+    if(st.phase==='ready'){
+      clearInterval(timer);
+      $('#upd-sub').textContent = 'Fertig geladen. Nach dem Neustart läuft die neue Version.';
+      go.textContent='Neu starten'; go.disabled=false; go.dataset.mode='restart';
+    } else if(st.phase==='error'){
+      clearInterval(timer);
+      $('#upd-sub').textContent = st.error; go.textContent='Nochmal versuchen'; go.disabled=false; go.dataset.mode='apply';
+    }
+  }
+  go.onclick = async ()=>{
+    const mode = go.dataset.mode;
+    if(mode==='installer'){
+      await fetch('/api/open-url',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({url:info.installer_url})});
+      box.classList.add('hidden');
+    } else if(mode==='restart'){
+      const r = await fetch('/api/update/restart',{method:'POST'});
+      if(r.ok){ $('#upd-sub').textContent='Starte neu …'; setTimeout(()=>location.reload(), 4000); }
+      else { const d=await r.json(); $('#upd-sub').textContent=d.error||'Bitte von Hand neu starten.'; }
+    } else {
+      go.disabled=true; bar.classList.remove('hidden'); bar.firstElementChild.style.width='0%';
+      $('#upd-sub').textContent='Lade Update …';
+      const r = await fetch('/api/update/apply',{method:'POST'});
+      if(!r.ok){ const d=await r.json(); $('#upd-sub').textContent=d.error||'Fehler'; go.disabled=false; return; }
+      clearInterval(timer); timer=setInterval(poll, 700);
+    }
+  };
+  $('#upd-later').onclick = ()=>box.classList.add('hidden');
+  $('#upd-btn').onclick = openBox;
+  $('#btn-update').onclick = ()=>check(true);
+  setTimeout(()=>check(false), 1500);
+  setInterval(()=>check(false), 6*3600*1000);
+})();
+
+/* ===================== Tanga Generator ===================== */
+let genRatio='1:1', genCount='1', genModel=localStorage.getItem('av_gen_model')||'klein4', genRef=null, genJob=null, genSetupTimer=null;
+wirePills('#gen-ratio', v=>genRatio=v);
+wirePills('#gen-count', v=>genCount=v);
+wireDrop('#gdrop','#gfile-input',list=>{
+  genRef = list[0]||null;
+  $('#gdrop-text').textContent = genRef ? genRef.name+' — klicken zum Ändern' : 'Bild hierher ziehen oder klicken';
+});
+
+function genRenderModels(d){
+  const box=$('#gen-models');
+  const list=[...d.models, {key:'custom', name:'Eigenes Modell', tag:'Frei', vram:'je nach Datei', ref:false,
+    hint:'Eigene Datei laden, z. B. ein SDXL-Checkpoint.', installed:!!d.custom, bytes:0}];
+  if(!list.some(m=>m.key===genModel)) genModel='klein4';
+  box.innerHTML='';
+  for(const m of list){
+    const el=document.createElement('div');
+    el.className='model'+(m.key===genModel?' active':'')+(m.installed?' inst':'');
+    const st = m.key==='custom' ? (d.custom ? 'Datei gewählt' : 'noch keine Datei')
+             : m.installed ? 'Bereit' : `Download ${fmtSize(m.bytes)}`;
+    el.innerHTML=`<div class="top"><b>${m.name}</b><span class="tag">${m.tag}</span></div>
+      <small>${m.hint}</small><span class="st">${st} · ${m.vram}</span>`;
+    el.onclick=()=>{ genModel=m.key; localStorage.setItem('av_gen_model',genModel); genRefresh(); };
+    box.appendChild(el);
+  }
+  const cur=list.find(m=>m.key===genModel);
+  $('#gen-custom').classList.toggle('hidden', genModel!=='custom');
+  $('#gen-ref-box').classList.toggle('hidden', !cur.ref);
+  if(genModel==='custom' && document.activeElement!==$('#gen-custom-path')) $('#gen-custom-path').value=d.custom||'';
+}
+
+async function genRefresh(){
+  let d;
+  try{ d = await (await fetch('/api/gen/status?model='+genModel)).json(); }catch(e){ return; }
+  genRenderModels(d);
+  const running = d.setup.phase==='running';
+  const needsDownload = d.missing.length>0;
+  $('#gen-setup').classList.toggle('hidden', !needsDownload && !running);
+  if(!genJob) $('#gen-go').disabled = !d.ready;
+  $('#gen-setup-go').classList.toggle('hidden', running);
+  $('#gen-setup-bar').classList.toggle('hidden', !running);
+  if(running){
+    $('#gen-setup-text').textContent = `${d.setup.label} · ${d.setup.progress} %`;
+    $('#gen-setup-bar').firstElementChild.style.width = d.setup.progress+'%';
+    if(!genSetupTimer) genSetupTimer=setInterval(genRefresh, 1000);
+  } else {
+    clearInterval(genSetupTimer); genSetupTimer=null;
+    if(d.setup.phase==='error') $('#gen-setup-text').textContent = d.setup.error;
+    else if(needsDownload) $('#gen-setup-text').textContent =
+      `Es fehlen noch ${d.missing.map(m=>m.label).join(', ')} — zusammen etwa ${fmtSize(d.missing_bytes)}. `+
+      'Wird einmal geladen und läuft danach komplett offline.';
+  }
+}
+$('#gen-setup-go').onclick = async ()=>{
+  await fetch('/api/gen/setup',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({model:genModel})});
+  genRefresh();
+};
+$('#gen-custom-save').onclick = async ()=>{
+  const r=await fetch('/api/gen/custom',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({path:$('#gen-custom-path').value})});
+  const d=await r.json();
+  toast(r.ok ? (d.path ? 'Modell übernommen.' : 'Eigenes Modell entfernt.') : (d.error||'Fehler'));
+  genRefresh();
+};
+
+const GEN_PHASE={wartet:'Wartet …', modell:'Modell wird geladen …', bild:'Bild entsteht', dekodieren:'Bild wird fertiggestellt …'};
+function genShot(f){
+  const el=document.createElement('div'); el.className='shot';
+  const rel=f.download.replace(/^\/download\//,'');
+  const act = isDesktop()
+    ? `<span class="act" data-rev="${rel}">${icon('folder')}<span>Im Ordner</span></span>`
+    : `<a href="${f.download}">${icon('save')}<span>Speichern</span></a>`;
+  el.innerHTML=`<img src="${f.view}" alt=""><div class="ov"><span>Seed ${f.seed}</span><span class="sp"></span>${act}</div>`;
+  el.querySelector('img').onclick=()=>{ $('#lightbox img').src=f.view; $('#lightbox').classList.remove('hidden'); };
+  el.querySelector('.ov span').onclick=()=>{ $('#gen-seed').value=f.seed; toast('Seed übernommen.'); };
+  return el;
+}
+$('#lightbox').onclick=()=>$('#lightbox').classList.add('hidden');
+
+$('#gen-go').onclick = async ()=>{
+  const go=$('#gen-go'), cnt=$('#gen-count-text'), bar=$('#gen-bar'), gal=$('#gen-gallery'), res=$('#gen-res');
+  if(genJob){                       // laufender Auftrag -> abbrechen
+    fetch('/api/gen/cancel/'+genJob,{method:'POST'}); return;
+  }
+  const prompt=$('#gen-prompt').value.trim();
+  res.innerHTML=''; cnt.classList.remove('hidden');
+  if(!prompt){ cnt.textContent='Bitte beschreibe, was du sehen willst.'; return; }
+  const fd=new FormData();
+  fd.append('prompt',prompt); fd.append('ratio',genRatio); fd.append('count',genCount);
+  fd.append('model',genModel); fd.append('seed',$('#gen-seed').value.trim());
+  if(genModel==='custom'){ fd.append('steps',$('#gen-steps').value.trim()); fd.append('cfg',$('#gen-cfg').value.trim().replace(',','.'));
+    fd.append('negative',$('#gen-negative').value.trim()); }
+  if(genRef && !$('#gen-ref-box').classList.contains('hidden')) fd.append('ref',genRef);
+  let d;
+  try{
+    const r=await fetch('/api/gen',{method:'POST',body:fd}); d=await r.json();
+    if(!r.ok){ cnt.textContent=d.error||'Fehler'; return; }
+  }catch(e){ cnt.textContent=e.message; return; }
+
+  genJob=d.id; gal.innerHTML=''; gal.classList.toggle('one', genCount==='1');
+  go.querySelector('span').textContent='Abbrechen'; go.classList.add('leaf');
+  bar.classList.remove('hidden'); bar.firstElementChild.style.width='0%';
+  let shown=0;
+  while(true){
+    await new Promise(r=>setTimeout(r,700));
+    let st;
+    try{ st=await (await fetch('/api/gen/job/'+genJob)).json(); }catch(e){ continue; }
+    for(const f of (st.files||[]).slice(shown)){ gal.appendChild(genShot(f)); shown++; }
+    bar.firstElementChild.style.width=st.progress+'%';
+    if(st.phase==='fertig'){ cnt.textContent=`Fertig: ${shown} Bild${shown===1?'':'er'}`; break; }
+    if(st.phase==='fehler'){ cnt.textContent=''; setRow(addRow(res,''),false,st.error||'Fehler'); break; }
+    cnt.textContent=(GEN_PHASE[st.phase]||st.phase)+(st.phase==='bild'?` · ${st.progress} %`:'');
+  }
+  genJob=null; bar.classList.add('hidden');
+  go.querySelector('span').textContent='Generieren'; go.classList.remove('leaf');
+  loadStats();
+};
+
+/* ===================== Klick-Welle auf Glasflaechen ===================== */
+document.addEventListener('pointerdown', e=>{
+  const host = e.target.closest('.tile,button.go,.ghost,.backbtn,.toggle');
+  if(!host || host.disabled) return;
+  const r = host.getBoundingClientRect(), dot = document.createElement('span');
+  dot.className='rip'; dot.style.left=(e.clientX-r.left)+'px'; dot.style.top=(e.clientY-r.top)+'px';
+  host.appendChild(dot); setTimeout(()=>dot.remove(), 620);
+});
+window.genReady=true;
+if(location.hash==='#gen') genRefresh();
+</script>
+</body>
+</html>

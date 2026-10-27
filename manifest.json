@@ -1,0 +1,253 @@
+{
+ "version": "2.1.1",
+ "min_runtime": 2,
+ "notes": "Updates kommen ab jetzt direkt \u00fcber den Updates-Knopf.",
+ "installer_url": "",
+ "ytdlp": "2026.10.21",
+ "files": {
+  "app.py": {
+   "sha256": "6fa804c35b59559e8c94abd3ba5bd6429ab94aebec421421ea745b3fe4d3b77c",
+   "size": 72584
+  },
+  "version.json": {
+   "sha256": "96ed8e0c980a236b193b169c1edee72c95d03dcfb4005753651815ca6e8dcb0b",
+   "size": 40
+  },
+  "update_channel.json": {
+   "sha256": "e51a2bb3a548bc2db7f746073ab19c3ccacbf8a775cab16f15279f181f4c7dc2",
+   "size": 82
+  },
+  "templates/index.html": {
+   "sha256": "d8028bc9abc932a85bad8788d48859649fac90492e025b7fd129df5c19dc98da",
+   "size": 107255
+  },
+  "static/bg.jpg": {
+   "sha256": "7f2f2735f4a223216f4109196ccbb59973287d16a89788049304b7df12c1f340",
+   "size": 299213
+  },
+  "static/icon.ico": {
+   "sha256": "cf01cbee4360ca678b6d2d2fb9b63ceca3b54f1471d697fd23703fdebd90227b",
+   "size": 125308
+  },
+  "static/icon.png": {
+   "sha256": "676b6779ac735145661d5e0db3a709593434000fcfafb3f03588f908549eade2",
+   "size": 931051
+  },
+  "static/img/appicon-128.png": {
+   "sha256": "1ef941d2d2597f12fcbfd78d3d130f2271cf8a58757d69ff4db2b91dc41031f6",
+   "size": 24628
+  },
+  "static/img/appicon-512.png": {
+   "sha256": "491d82284506e2270a451809f384d45b73b3e1503591077353728fb6cde3691f",
+   "size": 279243
+  },
+  "static/img/cover.jpg": {
+   "sha256": "fa36cb5aa6d25e62294bf159a44bbdd0bb82193b613071339516db10a7389961",
+   "size": 15674
+  },
+  "static/img/fx-bubble.webp": {
+   "sha256": "d5278fb3ac0bda05f39bdf303924140142736eaaaf547bb167e43549790cb88f",
+   "size": 18640
+  },
+  "static/img/fx-flare.webp": {
+   "sha256": "89729ff1da003108c6625fc6aa50f294065217cb6ee4a357bccf74468c41251c",
+   "size": 109366
+  },
+  "static/img/fx-wave.webp": {
+   "sha256": "794bb4d9ca9cc2952d47f2af09ed49708bbc6768c5186e49285d40e5282a8ca6",
+   "size": 323014
+  },
+  "static/img/ic-back.png": {
+   "sha256": "43a31b4a905548c4e8380728c5434027c204cc5721003c02bbdfe3671862b698",
+   "size": 5645
+  },
+  "static/img/ic-check.png": {
+   "sha256": "395cf6ea78726d3d177054eeccc8e43d94b84e2bf44e5fe054ddbaead65d6741",
+   "size": 12634
+  },
+  "static/img/ic-colors.png": {
+   "sha256": "d38045fab3cdb18c63248de0bc5f22fc74b25976f9c04bbed12cc27ba4472418",
+   "size": 16168
+  },
+  "static/img/ic-compress.png": {
+   "sha256": "76a40065fbcc8642cfb0550bc717820cc4bf0136de7ae3301faa47558c7105f8",
+   "size": 9047
+  },
+  "static/img/ic-convert.png": {
+   "sha256": "b28a652ffef20d5486425f259344c588e423b864b0290073f87c520d2bdd7d46",
+   "size": 12930
+  },
+  "static/img/ic-copy.png": {
+   "sha256": "1ae84a6f821ce4cb514ad14d1eef6545ca3b64e89d3111a7b6563f6a82f5c060",
+   "size": 6712
+  },
+  "static/img/ic-cutout.png": {
+   "sha256": "de384d492c7e42b8589dd7834a2d874847cc5ffc775a65fa37b57506913e14cb",
+   "size": 18523
+  },
+  "static/img/ic-folder.png": {
+   "sha256": "102caa7ecc04fe4b4153f3ece0e0bbf08a9d1f13532a1717fbc6e5805a200ccb",
+   "size": 9329
+  },
+  "static/img/ic-mute.png": {
+   "sha256": "95ee56b91d78d6bc4954b1be944576678a131d4ee8c29fffa7ec73f1a50ec9f9",
+   "size": 8558
+  },
+  "static/img/ic-next.png": {
+   "sha256": "ecc94ab78fe2df20026a12247afea7f36bf6bb1a8cfeb91d953eee74f3e651ab",
+   "size": 4601
+  },
+  "static/img/ic-note.png": {
+   "sha256": "67a681edcea948029da130cb852700995fab99359f32ada3188aa8988c54784b",
+   "size": 4781
+  },
+  "static/img/ic-pause.png": {
+   "sha256": "0a35aa54e1208b6fc33d14ab4ef1fc9e363011a0ba222ca9706092b30bd6db8b",
+   "size": 3243
+  },
+  "static/img/ic-play.png": {
+   "sha256": "0765a217bbb02d462bed6c0d45c3d2674afd37defb693ebf65fb30ab3bc37fc8",
+   "size": 3923
+  },
+  "static/img/ic-plus.png": {
+   "sha256": "bb6bdab18a35f5f05d92865f4fb100a9c7a5dff2529886c26798309c939dc5b2",
+   "size": 12309
+  },
+  "static/img/ic-prev.png": {
+   "sha256": "8c20d4e33be25770d78340d372b1e725c44a7553801314d89577e290c692ba01",
+   "size": 4614
+  },
+  "static/img/ic-qr.png": {
+   "sha256": "34feea40ec5998029e9b192d45d7852b99575e98bdb0dc9dc0dccaa170ed4544",
+   "size": 19486
+  },
+  "static/img/ic-save.png": {
+   "sha256": "5527d4ab0e382a7966e1c91ee27cf67c8c8c07e3054c4b6a901838a29f9035c0",
+   "size": 5177
+  },
+  "static/img/ic-shuffle.png": {
+   "sha256": "7d2c88d53e1f6e617de572f52dfa13a5736cf4e031ea6c4480e883d4cb8540b3",
+   "size": 7343
+  },
+  "static/img/ic-sound.png": {
+   "sha256": "d3ac34a40cdde6a6d5ed8a8c3585d9328f8bb3d1df7510e5031b07cb9cd298a9",
+   "size": 10027
+  },
+  "static/img/ic-spark.png": {
+   "sha256": "bf98147878963fba10ebdf953c70b5600f6fb9e686d6a6982c9d77902c806ff6",
+   "size": 9525
+  },
+  "static/img/ic-transcript.png": {
+   "sha256": "e218d341b184c9c7a59dc36902bedac218b454b54228ebd883b1ce755a997681",
+   "size": 7906
+  },
+  "static/img/ic-update.png": {
+   "sha256": "e5c932789a2e82e6d096ab10b71d0399a429806ccfdd3853f9d09d97ecbec47a",
+   "size": 9910
+  },
+  "static/img/ic-vector.png": {
+   "sha256": "4ac19dfbfb77d4bd1d47a04e6190a35d8fddb81ba6a4eab607cf43df1a855ae7",
+   "size": 15840
+  },
+  "static/img/ic-wand.png": {
+   "sha256": "4e21f628f5ee8b99d7892783f0878f9a144fd9246feadcff11a3a6cf727f2a84",
+   "size": 7008
+  },
+  "static/img/ic-warn.png": {
+   "sha256": "f6e73b7cc9185a27c329809e30cd3761e46fb1b7ec82bc5112c6fca53e6ab4e1",
+   "size": 10144
+  },
+  "static/img/ic-youtube.png": {
+   "sha256": "b9ea1a5eb960370341dae245655ea6962bb72a2756dc22fefeafe0f85b49fb69",
+   "size": 10538
+  },
+  "static/img/tool-colors.png": {
+   "sha256": "c90644a9e24d4025a73dff200095fc895b49298579566d138672c1669c029189",
+   "size": 84482
+  },
+  "static/img/tool-compress.png": {
+   "sha256": "280c8d551b8601c0b0df78402ba2337c2b288a9e59c7370cf1a527d6bfd5a1af",
+   "size": 66995
+  },
+  "static/img/tool-convert.png": {
+   "sha256": "86ca969af20be83af8c6f19f0c7d6e48a7507cc439f0be11422bbbe06c703cd4",
+   "size": 73875
+  },
+  "static/img/tool-cutout.png": {
+   "sha256": "8f9b1c97b4f4af4f9197c3be942c86f13a9ee58c8eaff83f3d17886a3b3b92e6",
+   "size": 60338
+  },
+  "static/img/tool-folder.png": {
+   "sha256": "23ba7f883b07b8473a0434c629ebba67d3c5255677fcd6112ac5e1c08198f6ed",
+   "size": 64546
+  },
+  "static/img/tool-qr.png": {
+   "sha256": "cf7644e877edef4b280c1e0b16002ee5d6c00c405ece41b2791e5eaa9a031209",
+   "size": 77906
+  },
+  "static/img/tool-tanga.png": {
+   "sha256": "33f446881276d7606041b6dc98a695a07086f25bdcbb36a496f3952e8cd35cca",
+   "size": 70530
+  },
+  "static/img/tool-transcript.png": {
+   "sha256": "68c4c0ddd7b4f90163e916ec84361cbbc6637d58b874843ec40866630b1a7504",
+   "size": 83379
+  },
+  "static/img/tool-vector.png": {
+   "sha256": "21822daa439eb5446b6947b7a7e7315cf6485641d59b48f348d2f25380d3dc78",
+   "size": 62906
+  },
+  "static/img/tool-youtube.png": {
+   "sha256": "7d5095e4feae22c256ce36ad01a27b7202664407bac9523a5b0910259adf41c0",
+   "size": 82104
+  },
+  "static/music/Aviens Toolbox - Paradise Loop.mp3": {
+   "sha256": "299f99b0c512bf353613c90dd212f59700a23c088618b6382da88e615c588358",
+   "size": 6180198
+  },
+  "static/popups/hf_20260305_141054_3225113e-42ce-421c-ad6c-2d161e444df5.png": {
+   "sha256": "b61aca192173892511be7aafdad4bda93908a56ecb5681d7cd3ce5a3a5fec45b",
+   "size": 2441637
+  },
+  "static/popups/hf_20260305_141058_e21d104c-c910-4506-ac58-d3fe2eabe9b3.png": {
+   "sha256": "e7020000500c33364fa95d5f0393d5890b4ba04040d60f1e843eda66fa73bc84",
+   "size": 2790113
+  },
+  "static/popups/hf_20260305_141102_13c6eaa8-e0bc-4c1c-8eb4-a513b2595227.png": {
+   "sha256": "ea7468cfc2d86bcc3ff251220463efbd26f1f3e33696b602954790b10234dd81",
+   "size": 2846848
+  },
+  "static/popups/hf_20260305_141103_9c09973a-d312-47de-b03a-9b78702117ae(2).png": {
+   "sha256": "32aaa657965610370f78e2afd9576d085b3ac0d3ece0fae4cf1a3ec90075de14",
+   "size": 528696
+  },
+  "static/popups/hf_20260305_141433_e77bccd4-4092-4ef9-b95e-a4e7677b6721.png": {
+   "sha256": "1983c13f3c6e7c019acb6ee1bd574f5c12f50e1abd3335b8ed804b28c244b6ff",
+   "size": 2758311
+  },
+  "static/popups/hf_20260305_142048_bff341f3-3c16-48c6-89fe-e6a4b9eebb5b.png": {
+   "sha256": "5d53618c8af88f3b132779e0ec8aa4423349638bc7577719d9dab745522123ea",
+   "size": 5703402
+  },
+  "static/popups/hf_20260305_142049_c33e3329-cfbf-4105-ba7d-d7b4211b8867.png": {
+   "sha256": "05adb3017f2922d3b2e9a5d08ccbffaaf5d03b83acc7baf72a007d5564fd32fe",
+   "size": 2330733
+  },
+  "static/popups/hf_20260305_142050_26359c0d-772b-4384-8bda-5695c48be102.png": {
+   "sha256": "e875106e64de9e7369f5a0453febc394706747713438c5d6d7aa3b884b9f6c26",
+   "size": 2518490
+  },
+  "static/wall-day.jpg": {
+   "sha256": "7879081ef07f4853da08483a969096a5a4f08a0dc242fdab58c9ec25f396053d",
+   "size": 247283
+  },
+  "static/wall-loop.mp4": {
+   "sha256": "7bc11d21c282b7f9d04e9a32b766b91f0ef344954bbdab48706ff105a474cd1c",
+   "size": 2049079
+  },
+  "lib/ytdlp.zip": {
+   "sha256": "29f4b5ecda5eb64c005b00d393af018c8abf8f83c93309d34811af3df21a4a5a",
+   "size": 3000219
+  }
+ }
+}

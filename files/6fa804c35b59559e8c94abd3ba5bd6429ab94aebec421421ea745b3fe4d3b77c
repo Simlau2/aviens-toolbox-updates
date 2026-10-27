@@ -1,0 +1,1847 @@
+"""
+Aviens Toolbox — lokales Web-Tool.
+- YouTube-Links -> mp3 / wav / mp4 (mit optionalem Zeitausschnitt)
+- Datei-Upload -> Zielformat waehlen (Bild: jpg/png/webp ..., Audio/Video: mp3/wav/mp4 ...)
+- Tanga Generator: FLUX.2 [klein] 4B lokal (stable-diffusion.cpp)
+- Auto-Updater + Playlist
+
+Start ueber start.bat (oder: python app.py). Oeffnet sich im Browser auf http://127.0.0.1:5000
+"""
+import os
+import re
+import sys
+import uuid
+import glob
+import json
+import shutil
+import random
+import hashlib
+import queue
+import time
+import socket
+import ctypes
+import zipfile
+import threading
+import webbrowser
+import subprocess
+import importlib.util
+import urllib.error
+import urllib.request
+from io import BytesIO
+from pathlib import Path
+from urllib.parse import urlparse, quote
+
+from flask import Flask, request, jsonify, send_file, render_template, abort
+
+# YouTube aendert oft etwas, dann braucht es ein neues yt-dlp. Das kommt per Update
+# als lib/ytdlp.zip (yt_dlp + yt_dlp_ejs, reines Python) und hat Vorrang vor der in
+# die .exe eingebauten Fassung - so reicht ein Update statt eines neuen Installers.
+_YTDLP_ZIP = Path(__file__).resolve().parent / "lib" / "ytdlp.zip"
+if _YTDLP_ZIP.is_file():
+    sys.path.insert(0, str(_YTDLP_ZIP))
+
+from yt_dlp import YoutubeDL
+from yt_dlp.version import __version__ as YTDLP_VERSION
+from yt_dlp.utils import download_range_func
+from PIL import Image, ImageDraw
+
+import bootstrap
+
+BASE = Path(__file__).resolve().parent
+
+
+def resource_path(rel):
+    """Pfad zu einer Ressource: erst die laufende Nutzlast (ggf. per Update
+    nachgeladen), dann die in die .exe eingebaute Fassung."""
+    own = BASE / rel
+    if own.exists():
+        return str(own)
+    return str(bootstrap.bundled_dir() / rel)
+
+
+# Datenordner (output/uploads/cookies/popups/models/update) - vom User beschreibbar.
+DATA_DIR = bootstrap.data_dir()
+APP_VERSION = str(bootstrap.read_version(BASE).get("version") or "0")
+
+OUTPUT = DATA_DIR / "output"
+UPLOADS = DATA_DIR / "uploads"
+OUTPUT.mkdir(exist_ok=True)
+UPLOADS.mkdir(exist_ok=True)
+
+# Ausgabe-Unterordner je Kategorie (Tab)
+OUT_YT = OUTPUT / "YouTube"
+OUT_CONV = OUTPUT / "Konvertiert"
+OUT_COMP = OUTPUT / "Komprimiert"
+OUT_TR = OUTPUT / "Transkripte"
+OUT_BG = OUTPUT / "Freigestellt"
+OUT_VEC = OUTPUT / "Vektoren"
+OUT_QR = OUTPUT / "QR-Codes"
+OUT_GEN = OUTPUT / "Tanga Generator"
+for _d in (OUT_YT, OUT_CONV, OUT_COMP, OUT_TR, OUT_BG, OUT_VEC, OUT_QR, OUT_GEN):
+    _d.mkdir(exist_ok=True)
+
+# Optionaler Notausgang gegen YouTube-Bot-Schutz: cookies.txt neben die .exe legen.
+COOKIES_FILE = DATA_DIR / "cookies.txt"
+
+# Popup-Gadget (DVD-Saver-Style): Bilder werden aus diesen Ordnern geladen.
+# Der erste Ordner liegt neben der .exe -> User kann jederzeit Bilder reinziehen.
+POPUP_DIRS = [DATA_DIR / "popups", Path(resource_path("static/popups"))]
+for _d in POPUP_DIRS:
+    try:
+        _d.mkdir(exist_ok=True)
+    except OSError:
+        pass
+POPUP_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+
+# ffmpeg: gebuendelte Version bevorzugen, sonst aus dem PATH.
+_FFNAME = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+_BUNDLED_FFMPEG = resource_path(_FFNAME)
+FFMPEG = _BUNDLED_FFMPEG if os.path.exists(_BUNDLED_FFMPEG) else "ffmpeg"
+FFMPEG_DIR = os.path.dirname(_BUNDLED_FFMPEG) if os.path.exists(_BUNDLED_FFMPEG) else None
+
+app = Flask(
+    __name__,
+    template_folder=resource_path("templates"),
+    static_folder=None,      # eigene Route mit Rueckfall auf die eingebaute Fassung
+)
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024  # 2 GB Upload-Limit
+
+IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "bmp", "tiff", "gif"}
+AUDIO_EXTS = {"mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"}
+VIDEO_EXTS = {"mp4", "mov", "mkv", "avi", "webm", "gif"}
+SVG_EXTS = {"svg", "svgz"}
+
+
+# ---------------------------------------------------------------- helpers
+def parse_time(s):
+    """'14' | '1:30' | '1:02:03' | '14.5'  ->  Sekunden (float) oder None."""
+    if s is None:
+        return None
+    s = str(s).strip()
+    if not s:
+        return None
+    try:
+        parts = [float(p) for p in s.split(":")]
+    except ValueError:
+        return None
+    sec = 0.0
+    for p in parts:
+        sec = sec * 60 + p
+    return sec
+
+
+def safe_stem(name):
+    name = os.path.splitext(os.path.basename(name))[0]
+    name = re.sub(r"[^\w.\- ]+", "_", name).strip()
+    return name or "datei"
+
+
+def unique_path(directory, name):
+    """Freier Pfad im Ordner — bei Namenskollision ' (2)', ' (3)' ... anhaengen."""
+    stem, dot, ext = name.rpartition(".")
+    cand = directory / name
+    i = 2
+    while cand.exists():
+        cand = directory / (f"{stem} ({i}).{ext}" if dot else f"{name} ({i})")
+        i += 1
+    return cand
+
+
+def dl_url(path):
+    """/download-URL fuer eine Datei unterhalb von OUTPUT (inkl. Unterordner)."""
+    return "/download/" + path.relative_to(OUTPUT).as_posix()
+
+
+def ffmpeg_run(args):
+    """Fuehrt ffmpeg aus und gibt (ok, stderr) zurueck."""
+    try:
+        proc = subprocess.run(
+            [FFMPEG, "-y", *args],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except FileNotFoundError:
+        return False, "ffmpeg wurde nicht gefunden (nicht im PATH)."
+    if proc.returncode != 0:
+        tail = "\n".join(proc.stderr.strip().splitlines()[-6:])
+        return False, tail or "ffmpeg-Fehler"
+    return True, ""
+
+
+# ---------------------------------------------------------------- routes
+@app.route("/")
+def index():
+    return render_template("index.html", version=APP_VERSION)
+
+
+@app.route("/static/<path:fname>")
+def static_files(fname):
+    """Statische Dateien: Update-Ordner zuerst, sonst die eingebaute Datei."""
+    for root in (BASE / "static", bootstrap.bundled_dir() / "static"):
+        target = (root / fname).resolve()
+        if root.resolve() in target.parents and target.is_file():
+            return send_file(str(target), conditional=True, max_age=0)
+    abort(404)
+
+
+# Strategien gegen YouTube-Bot-Schutz, der Reihe nach durchprobiert.
+# Je Eintrag: (player_clients, cookies-aus-Browser).
+# Erst alternative Player-Clients (umgehen den Bot-Check meist OHNE Login),
+# danach als letzter Ausweg Browser-Cookies.
+STRATEGIES = [
+    (None, None),               # Normalfall
+    (["tv"], None),             # alternative Clients umgehen den "not a bot"-Check oft
+    (["ios"], None),
+    (["web_safari"], None),
+    (["mweb"], None),
+    (None, ("firefox",)),       # ab hier: echte Login-Cookies aus dem Browser
+    (None, ("chrome",)),
+    (None, ("edge",)),
+    (None, ("brave",)),
+]
+BOT_HINTS = ("sign in to confirm", "not a bot", "confirm you", "use --cookies")
+# Fehler, die NICHT nach Bot-Schutz klingen, aber genauso von einem anderen
+# Player-Client geheilt werden: YouTube liefert dann Format-URLs, die beim
+# eigentlichen Datenabruf 403 werfen, gar keine Formate mehr anbietet, oder
+# verlangt einen PO-Token.
+RETRY_HINTS = BOT_HINTS + (
+    "403", "forbidden", "requested format is not available",
+    "only images are available", "po token", "needs to be reloaded",
+    "unable to download video data", "fragment", "precondition check failed",
+)
+
+
+def _is_bot_error(msg):
+    m = msg.lower()
+    return any(h in m for h in BOT_HINTS)
+
+
+def _is_retryable(msg):
+    m = msg.lower()
+    return any(h in m for h in RETRY_HINTS)
+
+
+def _download_youtube(url, fmt, bitrate, start, end, player_clients, cookies):
+    """Ein Download-Versuch mit optionalem Player-Client / Cookie-Quelle. Gibt Dateinamen zurueck."""
+    uid = uuid.uuid4().hex[:8]
+    # Staging in UPLOADS (uid zum Wiederfinden), fertige Datei wandert sauber
+    # benannt nach OUTPUT/YouTube.
+    opts = {
+        "outtmpl": str(UPLOADS / f"{uid}_%(title).80s.%(ext)s"),
+        "windowsfilenames": True,
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+    }
+    if FFMPEG_DIR:
+        opts["ffmpeg_location"] = FFMPEG_DIR
+    if player_clients:
+        opts["extractor_args"] = {"youtube": {"player_client": player_clients}}
+    if COOKIES_FILE.exists():
+        opts["cookiefile"] = str(COOKIES_FILE)
+    if cookies:
+        opts["cookiesfrombrowser"] = cookies
+
+    # Dauer nur ermitteln, wenn ein offenes Ende (Start ohne Ende) gebraucht wird.
+    if start is not None and end is None:
+        with YoutubeDL({**opts, "skip_download": True}) as probe:
+            info = probe.extract_info(url, download=False)
+        end = info.get("duration") or 0
+
+    if start is not None or end is not None:
+        s = start if start is not None else 0.0
+        e = end if end is not None else s
+        if e <= s:
+            raise ValueError("Endzeit muss groesser als Startzeit sein.")
+        opts["download_ranges"] = download_range_func(None, [(s, e)])
+        opts["force_keyframes_at_cuts"] = True
+
+    if fmt in {"mp3", "wav"}:
+        opts["format"] = "bestaudio/best"
+        pp = {"key": "FFmpegExtractAudio", "preferredcodec": fmt}
+        if fmt == "mp3":
+            pp["preferredquality"] = bitrate
+        opts["postprocessors"] = [pp]
+    else:  # mp4
+        opts["format"] = "bv*+ba/b"
+        opts["merge_output_format"] = "mp4"
+
+    with YoutubeDL(opts) as ydl:
+        ydl.download([url])
+
+    matches = sorted(glob.glob(str(UPLOADS / f"{uid}_*")), key=os.path.getmtime)
+    if not matches:
+        raise RuntimeError("Keine Ausgabedatei erzeugt.")
+    src = Path(matches[-1])
+    dst = unique_path(OUT_YT, src.name[9:] or "video")   # "{uid}_" abschneiden
+    src.rename(dst)
+    return dst
+
+
+@app.route("/api/youtube", methods=["POST"])
+def youtube():
+    data = request.get_json(force=True)
+    url = (data.get("url") or "").strip()
+    fmt = (data.get("format") or "mp3").lower()
+    bitrate = str(data.get("bitrate") or "192").strip() or "192"
+    start = parse_time(data.get("start"))
+    end = parse_time(data.get("end"))
+
+    if not url:
+        return jsonify(error="Kein YouTube-Link angegeben."), 400
+    if fmt not in {"mp3", "wav", "mp4"}:
+        return jsonify(error=f"Unbekanntes Format: {fmt}"), 400
+    if start is not None and end is not None and end <= start:
+        return jsonify(error="Endzeit muss groesser als Startzeit sein."), 400
+
+    last_err = "Unbekannter Fehler."
+    for i, (player_clients, cookies) in enumerate(STRATEGIES):
+        try:
+            f = _download_youtube(url, fmt, bitrate, start, end, player_clients, cookies)
+            return jsonify(file=f.name, download=dl_url(f))
+        except Exception as e:
+            msg = str(e)
+            # Erster (normaler) Versuch UND kein heilbarer Fehler -> echtes
+            # Problem (privates Video, Tippfehler im Link ...), sofort melden.
+            if i == 0 and not _is_retryable(msg):
+                return jsonify(error=f"Download fehlgeschlagen: {msg}"), 400
+            last_err = msg  # naechste Strategie probieren
+
+    return jsonify(error=(
+        "YouTube blockt gerade als Bot-Schutz und auch alternative Player-Clients/Cookies "
+        "haben nicht geholfen. Das ist meist ein temporaeres IP-Limit (kurz warten oder VPN). "
+        "Sicherer Notausgang: bei YouTube im Browser einloggen, Cookies als 'cookies.txt' "
+        "neben die .exe legen. Tipp: Unten auf 'Updates' tippen - ein neuer YouTube-Downloader "
+        "behebt Bot-Blocks oft sofort. "
+        f"Details: {last_err}"
+    )), 400
+
+
+@app.route("/api/convert", methods=["POST"])
+def convert():
+    if "file" not in request.files:
+        return jsonify(error="Keine Datei hochgeladen."), 400
+    f = request.files["file"]
+    target = (request.form.get("target") or "").lower().lstrip(".")
+    bitrate = (request.form.get("bitrate") or "").strip()
+    if not f or not f.filename:
+        return jsonify(error="Keine Datei ausgewaehlt."), 400
+    if not target:
+        return jsonify(error="Kein Zielformat gewaehlt."), 400
+
+    src_ext = os.path.splitext(f.filename)[1].lower().lstrip(".")
+    uid = uuid.uuid4().hex[:8]
+    src_path = UPLOADS / f"{uid}_{safe_stem(f.filename)}.{src_ext or 'bin'}"
+    f.save(src_path)
+
+    out_path = unique_path(OUT_CONV, f"{safe_stem(f.filename)}.{target}")
+
+    try:
+        if src_ext in SVG_EXTS and target in IMAGE_EXTS | {"pdf"}:
+            ok, err = convert_svg(src_path, out_path, target)
+        elif src_ext in SVG_EXTS:
+            ok, err = False, "SVG kann nur in ein Bildformat (PNG, JPG, WEBP …) oder PDF umgewandelt werden."
+        elif src_ext in IMAGE_EXTS and target in IMAGE_EXTS | {"pdf"}:
+            ok, err = convert_image(src_path, out_path, target)
+        else:
+            args = ["-i", str(src_path)]
+            if target in AUDIO_EXTS:          # Video/Audio -> reines Audio
+                args += ["-vn"]
+                if bitrate and target in {"mp3", "aac", "ogg", "m4a", "opus"}:
+                    args += ["-b:a", f"{bitrate}k"]
+            args += [str(out_path)]
+            ok, err = ffmpeg_run(args)
+        if not ok:
+            return jsonify(error=err), 400
+    finally:
+        try:
+            os.remove(src_path)
+        except OSError:
+            pass
+
+    return jsonify(file=out_path.name, download=dl_url(out_path))
+
+
+SVG_MIN_EDGE = 2048  # kleine SVGs (Icons) mindestens so gross rendern
+
+
+def convert_svg(src, dst, target):
+    """SVG per resvg rastern (Transparenz bleibt erhalten), dann wie ein Bild speichern."""
+    try:
+        import resvg_py
+    except ImportError:
+        return False, "SVG-Unterstuetzung fehlt (pip install resvg-py)."
+    try:
+        png = resvg_py.svg_to_bytes(svg_path=str(src))
+        w, h = Image.open(BytesIO(png)).size
+        if max(w, h) < SVG_MIN_EDGE:
+            png = resvg_py.svg_to_bytes(svg_path=str(src), zoom=SVG_MIN_EDGE / max(w, h))
+        im = Image.open(BytesIO(png))
+        im.load()
+    except Exception as e:
+        return False, f"SVG konnte nicht gelesen werden: {e}"
+    return convert_image(im, dst, target)
+
+
+def convert_image(src, dst, target):
+    try:
+        im = src if isinstance(src, Image.Image) else Image.open(src)
+        # JPEG/BMP/PDF koennen keine Transparenz -> auf weissen Grund legen
+        # (sonst werden transparente Flaechen schwarz).
+        if target in {"jpg", "jpeg", "bmp", "pdf"} and im.mode in {"RGBA", "LA", "P"}:
+            im = im.convert("RGBA")
+            flat = Image.new("RGB", im.size, (255, 255, 255))
+            flat.paste(im, mask=im.getchannel("A"))
+            im = flat
+        if target == "pdf":
+            im.save(dst, "PDF", resolution=100.0)
+            return True, ""
+        save_fmt = {"jpg": "JPEG", "jpeg": "JPEG"}.get(target, target.upper())
+        kwargs = {}
+        if target == "webp":
+            kwargs = {"quality": 90, "method": 6}
+        elif target in {"jpg", "jpeg"}:
+            kwargs = {"quality": 92}
+        im.save(dst, save_fmt, **kwargs)
+        return True, ""
+    except Exception as e:
+        return False, f"Bild-Konvertierung fehlgeschlagen: {e}"
+
+
+# ---------------------------------------------------------------- Komprimieren
+# Stufen: Ersparnis vs. Qualitaet. img_max = max. Kantenlaenge (None=Original).
+COMPRESS_LEVELS = {
+    "light":  {"img_q": 80, "img_max": None, "audio_kbps": "192", "video_crf": "26"},
+    "medium": {"img_q": 62, "img_max": 2560, "audio_kbps": "128", "video_crf": "30"},
+    "strong": {"img_q": 45, "img_max": 1600, "audio_kbps": "96",  "video_crf": "34"},
+}
+
+
+def _fit(im, maxdim):
+    """Bild proportional auf max. Kantenlaenge verkleinern (nur wenn noetig)."""
+    if not maxdim:
+        return im
+    w, h = im.size
+    if max(w, h) <= maxdim:
+        return im
+    if w >= h:
+        nw, nh = maxdim, round(h * maxdim / w)
+    else:
+        nh, nw = maxdim, round(w * maxdim / h)
+    return im.resize((max(1, nw), max(1, nh)), Image.LANCZOS)
+
+
+def compress_image(src, out_dir, stem, ext, cfg):
+    im = Image.open(src)
+    im = _fit(im, cfg["img_max"])
+    e = ext.lower()
+    if e in {"jpg", "jpeg"}:
+        if im.mode in {"RGBA", "LA", "P"}:
+            im = im.convert("RGB")
+        out = unique_path(out_dir, f"{stem}.jpg")
+        im.save(out, "JPEG", quality=cfg["img_q"], optimize=True, progressive=True)
+    elif e == "webp":
+        out = unique_path(out_dir, f"{stem}.webp")
+        im.save(out, "WEBP", quality=cfg["img_q"], method=6)
+    else:  # png/bmp/tiff -> optimiertes PNG (bei medium/strong Palette reduzieren)
+        out = unique_path(out_dir, f"{stem}.png")
+        if cfg["img_max"] is not None:
+            im = im.convert("RGBA").quantize(colors=256, method=Image.FASTOCTREE)
+        elif im.mode == "P":
+            im = im.convert("RGBA")
+        im.save(out, "PNG", optimize=True)
+    return out
+
+
+def compress_video(src, out_dir, stem, cfg):
+    out = unique_path(out_dir, f"{stem}.mp4")
+    ok, err = ffmpeg_run([
+        "-i", str(src), "-c:v", "libx264", "-crf", cfg["video_crf"], "-preset", "veryfast",
+        "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(out),
+    ])
+    return (out if ok else None), err
+
+
+def compress_audio(src, out_dir, stem, cfg):
+    out = unique_path(out_dir, f"{stem}.mp3")
+    ok, err = ffmpeg_run([
+        "-i", str(src), "-vn", "-c:a", "libmp3lame", "-b:a", f"{cfg['audio_kbps']}k", str(out),
+    ])
+    return (out if ok else None), err
+
+
+@app.route("/api/compress", methods=["POST"])
+def compress():
+    """Verkleinert EINE Datei (Bild/Video/Audio). Gibt Groessen zurueck."""
+    if "file" not in request.files:
+        return jsonify(error="Keine Datei hochgeladen."), 400
+    f = request.files["file"]
+    level = (request.form.get("level") or "medium").lower()
+    cfg = COMPRESS_LEVELS.get(level, COMPRESS_LEVELS["medium"])
+    if not f or not f.filename:
+        return jsonify(error="Keine Datei ausgewaehlt."), 400
+
+    ext = os.path.splitext(f.filename)[1].lower().lstrip(".")
+    uid = uuid.uuid4().hex[:8]
+    stem = safe_stem(f.filename)
+    src_path = UPLOADS / f"{uid}_{stem}.{ext or 'bin'}"
+    f.save(src_path)
+    orig = src_path.stat().st_size
+
+    try:
+        if ext in IMAGE_EXTS and ext != "gif":
+            out, err = compress_image(src_path, OUT_COMP, stem, ext, cfg), ""
+        elif ext in VIDEO_EXTS:            # inkl. gif -> mp4 (grosse Ersparnis)
+            out, err = compress_video(src_path, OUT_COMP, stem, cfg)
+        elif ext in AUDIO_EXTS:
+            out, err = compress_audio(src_path, OUT_COMP, stem, cfg)
+        else:
+            return jsonify(error=f"Typ .{ext} laesst sich nicht verkleinern - nutze 'Als ZIP packen'."), 400
+        if not out or not out.exists():
+            return jsonify(error=err or "Komprimierung fehlgeschlagen."), 400
+    except Exception as e:
+        return jsonify(error=f"Komprimierung fehlgeschlagen: {e}"), 400
+    finally:
+        try:
+            os.remove(src_path)
+        except OSError:
+            pass
+
+    return jsonify(file=out.name, download=dl_url(out),
+                   orig_size=orig, new_size=out.stat().st_size)
+
+
+@app.route("/api/zip", methods=["POST"])
+def make_zip():
+    """Packt mehrere Dateien in EIN .zip-Archiv."""
+    files = request.files.getlist("files")
+    files = [f for f in files if f and f.filename]
+    if not files:
+        return jsonify(error="Keine Dateien hochgeladen."), 400
+
+    out = unique_path(OUT_COMP, "Archiv.zip")
+    orig_total, used = 0, set()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+        for f in files:
+            arc = os.path.basename(f.filename) or "datei"
+            base, i = arc, 1
+            while arc in used:              # Namensdopplungen vermeiden
+                stem, dot, e = base.rpartition(".")
+                arc = f"{stem or base}_{i}{('.'+e) if dot else ''}"
+                i += 1
+            used.add(arc)
+            data = f.read()
+            orig_total += len(data)
+            zf.writestr(arc, data)
+
+    return jsonify(file=out.name, download=dl_url(out),
+                   orig_size=orig_total, new_size=out.stat().st_size, count=len(files))
+
+
+# ---------------------------------------------------------------- Freisteller
+# Bild-Hintergrund per KI entfernen (rembg/onnx). Modell (~170 MB) wird beim
+# allerersten Aufruf automatisch nach ~/.u2net geladen.
+_rembg_session = None
+_rembg_lock = threading.Lock()
+
+
+def _get_rembg():
+    global _rembg_session
+    with _rembg_lock:
+        if _rembg_session is None:
+            from rembg import new_session
+            _rembg_session = new_session("isnet-general-use")
+        return _rembg_session
+
+
+@app.route("/api/removebg", methods=["POST"])
+def removebg():
+    if importlib.util.find_spec("rembg") is None:
+        return jsonify(error="rembg ist nicht installiert. "
+                             "Im Terminal: pip install rembg onnxruntime"), 400
+    if "file" not in request.files:
+        return jsonify(error="Keine Datei hochgeladen."), 400
+    f = request.files["file"]
+    bg_mode = (request.form.get("bg") or "transparent").lower()
+    if not f or not f.filename:
+        return jsonify(error="Keine Datei ausgewaehlt."), 400
+    ext = os.path.splitext(f.filename)[1].lower().lstrip(".")
+    if ext not in IMAGE_EXTS:
+        return jsonify(error=f".{ext} ist kein Bild — bitte PNG/JPG/WebP hochladen."), 400
+
+    uid = uuid.uuid4().hex[:8]
+    stem = safe_stem(f.filename)
+    src_path = UPLOADS / f"{uid}_{stem}.{ext}"
+    f.save(src_path)
+    try:
+        from rembg import remove
+        im = Image.open(src_path).convert("RGBA")
+        cut = remove(im, session=_get_rembg())
+        if bg_mode == "white":
+            base = Image.new("RGBA", cut.size, "#ffffffff")
+            base.alpha_composite(cut)
+            cut = base.convert("RGB")
+        out = unique_path(OUT_BG, f"{stem}_frei.png")
+        cut.save(out, "PNG", optimize=True)
+    except Exception as e:
+        return jsonify(error=f"Freistellen fehlgeschlagen: {e}"), 400
+    finally:
+        try:
+            os.remove(src_path)
+        except OSError:
+            pass
+    return jsonify(file=out.name, download=dl_url(out))
+
+
+# ---------------------------------------------------------------- Vektorisierer
+# Rasterbild -> SVG (vtracer). Detailgrad steuert Speckle-Filter & Farbaufloesung.
+VEC_DETAIL = {
+    "fein":   {"filter_speckle": 2, "color_precision": 7, "layer_difference": 12},
+    "normal": {"filter_speckle": 4, "color_precision": 6, "layer_difference": 16},
+    "grob":   {"filter_speckle": 8, "color_precision": 5, "layer_difference": 24},
+}
+
+
+@app.route("/api/vectorize", methods=["POST"])
+def vectorize():
+    if importlib.util.find_spec("vtracer") is None:
+        return jsonify(error="vtracer ist nicht installiert. "
+                             "Im Terminal: pip install vtracer"), 400
+    if "file" not in request.files:
+        return jsonify(error="Keine Datei hochgeladen."), 400
+    f = request.files["file"]
+    mode = (request.form.get("mode") or "color").lower()
+    cfg = VEC_DETAIL.get((request.form.get("detail") or "normal").lower(), VEC_DETAIL["normal"])
+    if not f or not f.filename:
+        return jsonify(error="Keine Datei ausgewaehlt."), 400
+    ext = os.path.splitext(f.filename)[1].lower().lstrip(".")
+    if ext not in IMAGE_EXTS:
+        return jsonify(error=f".{ext} ist kein Bild — bitte PNG/JPG/WebP hochladen."), 400
+
+    uid = uuid.uuid4().hex[:8]
+    stem = safe_stem(f.filename)
+    src_path = UPLOADS / f"{uid}_{stem}.{ext}"
+    f.save(src_path)
+    tmp_png = UPLOADS / f"{uid}_vt.png"
+    try:
+        import vtracer
+        im = Image.open(src_path)
+        # Transparenz auf Weiss legen + auf max. 2000 px begrenzen (Tempo/Groesse).
+        if im.mode in {"RGBA", "LA", "P"}:
+            im = im.convert("RGBA")
+            base = Image.new("RGBA", im.size, "#ffffffff")
+            base.alpha_composite(im)
+            im = base
+        im = _fit(im.convert("RGB"), 2000)
+        im.save(tmp_png, "PNG")
+
+        out = unique_path(OUT_VEC, f"{stem}.svg")
+        vtracer.convert_image_to_svg_py(
+            str(tmp_png), str(out),
+            colormode="binary" if mode == "bw" else "color",
+            filter_speckle=cfg["filter_speckle"],
+            color_precision=cfg["color_precision"],
+            layer_difference=cfg["layer_difference"],
+        )
+        if not out.exists():
+            return jsonify(error="Vektorisierung hat keine Datei erzeugt."), 400
+    except Exception as e:
+        return jsonify(error=f"Vektorisierung fehlgeschlagen: {e}"), 400
+    finally:
+        for p in (src_path, tmp_png):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    return jsonify(file=out.name, download=dl_url(out))
+
+
+# ---------------------------------------------------------------- QR-Codes
+def _hex_rgb(s, default=(0, 0, 0)):
+    s = (s or "").strip().lstrip("#")
+    if len(s) == 3:
+        s = "".join(c * 2 for c in s)
+    if not re.fullmatch(r"[0-9a-fA-F]{6}", s):
+        return default
+    return tuple(int(s[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _qr_matrix(text):
+    import qrcode
+    q = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, border=2)
+    q.add_data(text)
+    q.make(fit=True)
+    return q.get_matrix()          # inkl. Ruhezone (border)
+
+
+def _qr_png(matrix, size, fg, bg, style):
+    """Matrix -> PIL-Bild. bg=None -> transparent. style: 'square' | 'round'."""
+    n = len(matrix)
+    ss = 2 if style == "round" else 1          # Supersampling gegen Treppchen
+    px = max(3, round(size / n)) * ss
+    s = px * n
+    img = Image.new("RGBA", (s, s), (*bg, 255) if bg else (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    pad = max(1, round(px * 0.09))
+    for y, row in enumerate(matrix):
+        for x, v in enumerate(row):
+            if not v:
+                continue
+            x0, y0 = x * px, y * px
+            if style == "round":
+                d.ellipse([x0 + pad, y0 + pad, x0 + px - pad, y0 + px - pad], fill=(*fg, 255))
+            else:
+                d.rectangle([x0, y0, x0 + px - 1, y0 + px - 1], fill=(*fg, 255))
+    if ss > 1:
+        img = img.resize((s // ss, s // ss), Image.LANCZOS)
+    return img
+
+
+def _qr_svg(matrix, size, fg, bg, style):
+    n = len(matrix)
+    fg_hex = "#%02x%02x%02x" % fg
+    crisp = ' shape-rendering="crispEdges"' if style != "round" else ""
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {n} {n}" '
+             f'width="{size}" height="{size}"{crisp}>']
+    if bg:
+        parts.append('<rect width="%d" height="%d" fill="#%02x%02x%02x"/>' % (n, n, *bg))
+    if style == "round":
+        dots = "".join(f'<circle cx="{x + 0.5}" cy="{y + 0.5}" r="0.41"/>'
+                       for y, row in enumerate(matrix) for x, v in enumerate(row) if v)
+        parts.append(f'<g fill="{fg_hex}">{dots}</g>')
+    else:
+        path = "".join(f"M{x} {y}h1v1h-1z"
+                       for y, row in enumerate(matrix) for x, v in enumerate(row) if v)
+        parts.append(f'<path d="{path}" fill="{fg_hex}"/>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+@app.route("/api/qr", methods=["POST"])
+def qr_make():
+    if importlib.util.find_spec("qrcode") is None:
+        return jsonify(error="qrcode ist nicht installiert. Im Terminal: pip install qrcode"), 400
+    data = request.get_json(force=True)
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify(error="Bitte Text oder URL eingeben."), 400
+    fg = _hex_rgb(data.get("fg"), (16, 48, 58))
+    bg = None if data.get("transparent") else _hex_rgb(data.get("bg"), (255, 255, 255))
+    style = "round" if (data.get("style") or "") == "round" else "square"
+    fmt = "svg" if (data.get("format") or "") == "svg" else "png"
+    try:
+        size = min(4096, max(120, int(data.get("size") or 1024)))
+    except (TypeError, ValueError):
+        size = 1024
+
+    try:
+        matrix = _qr_matrix(text)
+        if data.get("preview"):            # Live-Vorschau: PNG direkt zurueck, nichts speichern
+            buf = BytesIO()
+            _qr_png(matrix, 360, fg, bg, style).save(buf, "PNG")
+            buf.seek(0)
+            return send_file(buf, mimetype="image/png")
+        # Kein safe_stem: das wuerde ".de" einer URL als Dateiendung abschneiden.
+        raw = re.sub(r"^https?://(www\.)?", "", text)
+        stem = re.sub(r"[^\w.\- ]+", "_", raw).strip("._ ")[:40] or "code"
+        out = unique_path(OUT_QR, f"QR_{stem}.{fmt}")
+        if fmt == "svg":
+            out.write_text(_qr_svg(matrix, size, fg, bg, style), encoding="utf-8")
+        else:
+            _qr_png(matrix, size, fg, bg, style).save(out, "PNG", optimize=True)
+    except Exception as e:
+        return jsonify(error=f"QR-Code fehlgeschlagen: {e}"), 400
+    return jsonify(file=out.name, download=dl_url(out))
+
+
+# ---------------------------------------------------------------- Transkription
+# Video/Stream (m3u8, YouTube, ...) oder lokale Datei -> .txt + .srt via faster-whisper.
+# Download- und Whisper-Worker sind getrennt: signierte Stream-URLs (z.B. CloudFront)
+# laufen ab, deshalb werden ALLE Downloads sofort gezogen, waehrend die Transkription
+# nacheinander laeuft (GPU/Modell kann eh nur seriell).
+TRANSCRIBE_MODELS = {"large-v3", "medium", "small"}
+
+_jobs = {}                      # job_id -> dict (interner Zustand)
+_jobs_lock = threading.Lock()
+_dl_queue = queue.Queue()       # Jobs, die noch heruntergeladen werden muessen
+_tx_queue = queue.Queue()       # Jobs, die bereit fuer Whisper sind
+_workers_started = False
+_whisper_cache = {}             # model_name -> (WhisperModel, "GPU"|"CPU")
+_whisper_lock = threading.Lock()
+
+
+def _job_update(jid, **kw):
+    with _jobs_lock:
+        _jobs[jid].update(kw)
+
+
+def _job_get(jid, key, default=None):
+    with _jobs_lock:
+        return _jobs[jid].get(key, default)
+
+
+def _hms(s):
+    s = int(s)
+    return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
+
+
+def _srt_ts(s):
+    ms = int(round(s * 1000))
+    return f"{ms // 3600000:02d}:{ms % 3600000 // 60000:02d}:{ms % 60000 // 1000:02d},{ms % 1000:03d}"
+
+
+def _nvidia_dll_dirs():
+    """bin-Ordner mit den CUDA-DLLs (cublas/cudnn).
+
+    Dev: pip-Pakete nvidia-cublas-cu12/nvidia-cudnn-cu12 in site-packages.
+    .exe: von PyInstaller nach _MEIPASS/nvidia/<paket>/bin gebuendelt."""
+    dirs = glob.glob(os.path.join(resource_path("nvidia"), "*", "bin"))
+    try:
+        import nvidia
+        for base in nvidia.__path__:
+            dirs += glob.glob(os.path.join(base, "*", "bin"))
+    except ImportError:
+        pass
+    return dirs
+
+
+def _pick_device():
+    """'cuda' nur, wenn cuBLAS/cuDNN wirklich ladbar sind — sonst crasht ctranslate2 hart.
+
+    ctranslate2 laedt die CUDA-DLLs per einfachem LoadLibrary (PATH-Suche, ignoriert
+    os.add_dll_directory). Deshalb: bin-Ordner der nvidia-pip-Pakete in den PATH haengen
+    UND die DLLs vorab in den Prozess laden."""
+    loaded = []
+    if sys.platform == "win32":
+        for d in _nvidia_dll_dirs():
+            os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+            try:
+                os.add_dll_directory(d)
+            except OSError:
+                pass
+            for dll in glob.glob(os.path.join(d, "*.dll")):
+                try:
+                    ctypes.WinDLL(dll)
+                    loaded.append(os.path.basename(dll).lower())
+                except OSError:
+                    pass
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
+            if sys.platform == "win32" and not (
+                    any(n.startswith("cublas64") for n in loaded)
+                    and any(n.startswith("cudnn_ops64") for n in loaded)):
+                # System-Installation von CUDA/cuDNN als letzte Chance
+                ctypes.WinDLL("cublas64_12.dll")
+                ctypes.WinDLL("cudnn_ops64_9.dll")
+            return "cuda", "float16"
+    except Exception:
+        pass
+    return "cpu", "int8"
+
+
+def _get_whisper(name):
+    with _whisper_lock:
+        if name in _whisper_cache:
+            return _whisper_cache[name]
+        from faster_whisper import WhisperModel
+        device, compute = _pick_device()
+        try:
+            model = WhisperModel(name, device=device, compute_type=compute)
+        except Exception:
+            device = "cpu"
+            model = WhisperModel(name, device="cpu", compute_type="int8")
+        entry = (model, "GPU" if device == "cuda" else "CPU")
+        _whisper_cache[name] = entry
+        return entry
+
+
+def _transcribe_download(jid, url, referer, keep_video):
+    """Laedt die Quelle (m3u8/YouTube/...) nach OUTPUT und gibt den Pfad zurueck."""
+    uid = uuid.uuid4().hex[:8]
+
+    def hook(d):
+        if d.get("status") != "downloading":
+            return
+        tot = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+        got = d.get("downloaded_bytes") or 0
+        frags, frag_i = d.get("fragment_count"), d.get("fragment_index")
+        if tot:
+            pct = got * 100 / tot
+        elif frags:
+            pct = (frag_i or 0) * 100 / frags
+        else:
+            pct = 0
+        _job_update(jid, progress=round(min(99, pct)))
+
+    opts = {
+        "outtmpl": str(UPLOADS / f"{uid}_%(title).80s.%(ext)s"),
+        "windowsfilenames": True,
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "progress_hooks": [hook],
+        "concurrent_fragment_downloads": 4,
+    }
+    if FFMPEG_DIR:
+        opts["ffmpeg_location"] = FFMPEG_DIR
+    if COOKIES_FILE.exists():
+        opts["cookiefile"] = str(COOKIES_FILE)
+    if referer:
+        u = urlparse(referer)
+        origin = f"{u.scheme}://{u.netloc}" if u.scheme and u.netloc else referer
+        opts["http_headers"] = {"Referer": referer, "Origin": origin}
+    if keep_video:
+        opts["format"] = "bv*+ba/b"
+        opts["merge_output_format"] = "mp4"
+        opts["postprocessors"] = [{"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"}]
+    else:
+        opts["format"] = "bestaudio/best"
+
+    # Wie beim YouTube-Downloader: bei heilbaren Fehlern (403, fehlende Formate,
+    # Bot-Check) die alternativen Player-Clients der Reihe nach durchprobieren.
+    last_exc = None
+    for i, (player_clients, cookies) in enumerate(STRATEGIES):
+        o = dict(opts)
+        if player_clients:
+            o["extractor_args"] = {"youtube": {"player_client": player_clients}}
+        if cookies:
+            o["cookiesfrombrowser"] = cookies
+        try:
+            with YoutubeDL(o) as ydl:
+                ydl.download([url])
+            last_exc = None
+            break
+        except Exception as e:
+            last_exc = e
+            if i == 0 and not _is_retryable(str(e)):
+                raise
+    if last_exc is not None:
+        raise last_exc
+
+    matches = sorted(glob.glob(str(UPLOADS / f"{uid}_*")), key=os.path.getmtime)
+    if not matches:
+        raise RuntimeError("Download hat keine Datei erzeugt.")
+    src = Path(matches[-1])
+    dst = unique_path(OUT_TR, src.name[9:] or "video")   # "{uid}_" abschneiden
+    src.rename(dst)
+    return dst
+
+
+def _extract_wav(src):
+    """Audiospur als 16-kHz-Mono-WAV nach UPLOADS (Whisper-Input, wird geloescht)."""
+    wav = UPLOADS / f"{src.stem}_16k.wav"
+    ok, err = ffmpeg_run(["-i", str(src), "-vn", "-ac", "1", "-ar", "16000", str(wav)])
+    if not ok or not wav.exists():
+        raise RuntimeError(f"Audio-Extraktion fehlgeschlagen: {err}")
+    return wav
+
+
+def _run_whisper(jid, wav, model_name, language, out_stem):
+    _job_update(jid, phase="modell", progress=0)
+    model, device = _get_whisper(model_name)
+    _job_update(jid, device=device)
+
+    # Dauer direkt aus der WAV-Groesse (16 kHz mono 16-bit = 32000 Byte/s).
+    duration = max(0.001, (wav.stat().st_size - 44) / 32000)
+    segments, _info = model.transcribe(
+        str(wav),
+        language=None if language == "auto" else language,
+        vad_filter=True,      # Stille/Pausen ueberspringen — spart bei Webinaren viel Zeit
+        beam_size=5,
+    )
+
+    txt_lines, srt_blocks, n = [], [], 0
+    for seg in segments:
+        text = seg.text.strip()
+        if not text:
+            continue
+        n += 1
+        txt_lines.append(f"[{_hms(seg.start)}] {text}")
+        srt_blocks.append(f"{n}\n{_srt_ts(seg.start)} --> {_srt_ts(seg.end)}\n{text}\n")
+        _job_update(jid, phase="transkription", progress=round(min(99, seg.end * 100 / duration)))
+
+    txt_path = unique_path(OUT_TR, f"{out_stem}.txt")
+    srt_path = unique_path(OUT_TR, f"{out_stem}.srt")
+    txt_path.write_text("\n".join(txt_lines), encoding="utf-8")
+    srt_path.write_text("\n".join(srt_blocks), encoding="utf-8")
+    return txt_path, srt_path
+
+
+def _dl_worker():
+    while True:
+        jid = _dl_queue.get()
+        try:
+            _job_update(jid, phase="download", progress=0)
+            src = _transcribe_download(
+                jid, _job_get(jid, "url"), _job_get(jid, "referer"), _job_get(jid, "keep_video"))
+            _job_update(jid, src_path=str(src), label=src.name, phase="warten", progress=0)
+            _tx_queue.put(jid)
+        except Exception as e:
+            msg = str(e)
+            if "Unsupported URL" in msg:
+                msg += ("  Hinweis: Das ist eine Webseiten-URL, kein Video-Stream. Bei Login-Portalen "
+                        "(WebinarJam & Co.): Video im Browser abspielen, F12 → Netzwerk-Tab → "
+                        "nach 'm3u8' filtern → diese URL hier einfuegen.")
+            _job_update(jid, phase="fehler", error=f"Download fehlgeschlagen: {msg}")
+
+
+def _tx_worker():
+    while True:
+        jid = _tx_queue.get()
+        wav = None
+        try:
+            src = Path(_job_get(jid, "src_path"))
+            _job_update(jid, phase="audio", progress=0)
+            wav = _extract_wav(src)
+            out_stem = _job_get(jid, "out_stem") or src.stem
+            txt, srt = _run_whisper(
+                jid, wav, _job_get(jid, "model"), _job_get(jid, "language"), out_stem)
+
+            files = []
+            if _job_get(jid, "url"):    # Quelle kam per Download -> mit anbieten
+                kind = "MP4" if _job_get(jid, "keep_video") else "Audio"
+                files.append({"kind": kind, "download": dl_url(src)})
+            files.append({"kind": "TXT", "download": dl_url(txt)})
+            files.append({"kind": "SRT", "download": dl_url(srt)})
+            _job_update(jid, phase="fertig", progress=100, files=files)
+        except Exception as e:
+            _job_update(jid, phase="fehler", error=str(e))
+        finally:
+            for p in (wav, (Path(_job_get(jid, "src_path")) if _job_get(jid, "cleanup_src") else None)):
+                try:
+                    if p:
+                        os.remove(p)
+                except OSError:
+                    pass
+
+
+def _ensure_workers():
+    global _workers_started
+    if _workers_started:
+        return
+    _workers_started = True
+    threading.Thread(target=_dl_worker, daemon=True).start()
+    threading.Thread(target=_tx_worker, daemon=True).start()
+
+
+@app.route("/api/transcribe", methods=["POST"])
+def transcribe_start():
+    if importlib.util.find_spec("faster_whisper") is None:
+        return jsonify(error="faster-whisper ist nicht installiert. "
+                             "Im Terminal: pip install faster-whisper"), 400
+
+    model = (request.form.get("model") or "large-v3").strip()
+    language = (request.form.get("language") or "de").strip()
+    referer = (request.form.get("referer") or "").strip()
+    keep_video = (request.form.get("keep_video") or "1") == "1"
+    urls = [u.strip() for u in (request.form.get("urls") or "").split("\n") if u.strip()]
+    files = [f for f in request.files.getlist("files") if f and f.filename]
+
+    if model not in TRANSCRIBE_MODELS:
+        return jsonify(error=f"Unbekanntes Modell: {model}"), 400
+    if not urls and not files:
+        return jsonify(error="Bitte Links eingeben oder Dateien auswaehlen."), 400
+
+    _ensure_workers()
+    jobs_out = []
+
+    def new_job(label, **extra):
+        jid = uuid.uuid4().hex[:12]
+        with _jobs_lock:
+            _jobs[jid] = {"label": label, "phase": "wartet", "progress": 0,
+                          "model": model, "language": language, "referer": referer,
+                          "keep_video": keep_video, "files": [], **extra}
+        jobs_out.append({"id": jid, "label": label})
+        return jid
+
+    for url in urls:
+        short = url if len(url) <= 60 else url[:60] + "…"
+        _dl_queue.put(new_job(short, url=url))
+
+    for f in files:
+        ext = os.path.splitext(f.filename)[1].lower().lstrip(".") or "bin"
+        uid = uuid.uuid4().hex[:8]
+        src = UPLOADS / f"{uid}_{safe_stem(f.filename)}.{ext}"
+        f.save(src)
+        _tx_queue.put(new_job(os.path.basename(f.filename),
+                              src_path=str(src), cleanup_src=True, url=None,
+                              out_stem=safe_stem(f.filename)))
+
+    return jsonify(jobs=jobs_out)
+
+
+@app.route("/api/transcribe/status")
+def transcribe_status():
+    ids = [i for i in (request.args.get("ids") or "").split(",") if i]
+    out = {}
+    with _jobs_lock:
+        for i in ids:
+            j = _jobs.get(i)
+            if j:
+                out[i] = {k: j.get(k) for k in
+                          ("label", "phase", "progress", "error", "files", "device")}
+    return jsonify(jobs=out)
+
+
+# Ausgabe-Kategorien fuer die Uebersicht (Reihenfolge = Reihenfolge im Fenster).
+CATEGORIES = [
+    ("YouTube", "YouTube"),
+    ("Konvertiert", "Konvertiert"),
+    ("Komprimiert", "Komprimiert"),
+    ("Transkripte", "Transkripte"),
+    ("Freigestellt", "Freigestellt"),
+    ("Vektoren", "Vektoren"),
+    ("QR-Codes", "QR-Codes"),
+    ("Tanga Generator", "Tanga Generator"),
+]
+
+
+@app.route("/api/open-folder", methods=["POST"])
+def open_folder():
+    """Zeigt den Ausgabe-Ordner im Finder/Explorer. Optional eine Unterkategorie."""
+    data = request.get_json(silent=True) or {}
+    sub = str(data.get("sub") or "").strip()
+    target = OUTPUT
+    if sub and sub in {d for d, _ in CATEGORIES}:
+        target = OUTPUT / sub
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(str(target))  # noqa: S606 - lokaler Pfad
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(target)])
+        else:
+            subprocess.run(["xdg-open", str(target)])
+        return jsonify(ok=True, path=str(target))
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 400
+
+
+@app.route("/api/reveal", methods=["POST"])
+def reveal():
+    """Zeigt eine einzelne Datei im Finder/Explorer (markiert sie)."""
+    data = request.get_json(silent=True) or {}
+    rel = str(data.get("file") or "").strip().lstrip("/")
+    target = (OUTPUT / rel).resolve()
+    if OUTPUT.resolve() not in target.parents or not target.exists():
+        return jsonify(ok=False, error="Datei nicht gefunden"), 404
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["explorer", "/select,", str(target)])
+        elif sys.platform == "darwin":
+            subprocess.run(["open", "-R", str(target)])
+        else:
+            subprocess.run(["xdg-open", str(target.parent)])
+        return jsonify(ok=True)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 400
+
+
+@app.route("/api/stats")
+def stats():
+    """Zahlen fuer die Startseite: was liegt tatsaechlich im Ausgabe-Ordner?"""
+    now = time.time()
+    cats, recent, total, total_bytes = [], [], 0, 0
+    for folder, label in CATEGORIES:
+        d = OUTPUT / folder
+        count = size = 0
+        if d.exists():
+            for f in d.iterdir():
+                if not f.is_file() or f.name.startswith("."):
+                    continue
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                count += 1
+                size += st.st_size
+                recent.append({
+                    "file": f.name,
+                    "name": re.sub(r"^[0-9a-f]{8}_", "", f.name),
+                    "dir": folder,
+                    "size": st.st_size,
+                    "age": max(0, int(now - st.st_mtime)),
+                })
+        cats.append({"dir": folder, "label": label, "count": count, "bytes": size})
+        total += count
+        total_bytes += size
+
+    recent.sort(key=lambda r: r["age"])
+    return jsonify(total=total, bytes=total_bytes, cats=cats, recent=recent[:6])
+
+
+@app.route("/api/popups")
+def popups_list():
+    """Listet alle Bilder aus den popups-Ordnern (fuer das DVD-Saver-Gadget)."""
+    seen, urls = set(), []
+    for d in POPUP_DIRS:
+        if not d.exists():
+            continue
+        for p in sorted(d.iterdir()):
+            if p.is_file() and p.suffix.lower() in POPUP_EXTS and p.name not in seen:
+                seen.add(p.name)
+                urls.append(f"/popups/{p.name}")
+    return jsonify(images=urls)
+
+
+@app.route("/popups/<path:fname>")
+def popups_serve(fname):
+    """Liefert ein Popup-Bild aus dem ersten passenden popups-Ordner."""
+    name = os.path.basename(fname)
+    for d in POPUP_DIRS:
+        target = (d / name)
+        if target.exists() and target.is_file():
+            return send_file(str(target))
+    abort(404)
+
+
+# ---------------------------------------------------------------- Playlist
+# Musik kommt aus drei Quellen: eigener Ordner "music" neben der .exe (User kann
+# MP3s reinziehen), Update-Ordner und eingebaute Titel. Dateiname "Kuenstler - Titel.mp3".
+MUSIC_EXTS = {".mp3", ".ogg", ".m4a", ".wav", ".flac"}
+
+
+def _music_dirs():
+    dirs = [DATA_DIR / "music", BASE / "static" / "music",
+            bootstrap.bundled_dir() / "static" / "music"]
+    try:
+        dirs[0].mkdir(exist_ok=True)
+    except OSError:
+        pass
+    return dirs
+
+
+@app.route("/api/playlist")
+def playlist():
+    seen, tracks = set(), []
+    for d in _music_dirs():
+        if not d.exists():
+            continue
+        for p in sorted(d.iterdir(), key=lambda x: x.name.lower()):
+            if not p.is_file() or p.suffix.lower() not in MUSIC_EXTS or p.name in seen:
+                continue
+            seen.add(p.name)
+            artist, sep, title = p.stem.partition(" - ")
+            if not sep:
+                artist, title = "", p.stem
+            tracks.append({"file": p.name, "title": title.strip(), "artist": artist.strip(),
+                           "url": "/music/" + quote(p.name)})
+    return jsonify(tracks=tracks)
+
+
+@app.route("/music/<path:fname>")
+def music_serve(fname):
+    name = os.path.basename(fname)
+    for d in _music_dirs():
+        target = d / name
+        if target.is_file() and target.suffix.lower() in MUSIC_EXTS:
+            return send_file(str(target), conditional=True)
+    abort(404)
+
+
+# ---------------------------------------------------------------- Tanga Generator
+# Lokale Bild-KI ueber stable-diffusion.cpp. Standard ist FLUX.2 [klein] 4B
+# (distilled, 4 Schritte); staerkere Modelle sind waehlbar (GEN_MODELS). Bewusst
+# NICHT ueber torch/diffusers: das Programm bliebe sonst mehrere GB groesser und
+# liefe nur auf NVIDIA. Die Vulkan-Fassung laeuft auf NVIDIA, AMD und Intel, der
+# Mac nutzt Metal. Programm + Modelle werden beim ersten Mal nach
+# <Datenordner>/models geladen (~5 GB) und danach komplett offline benutzt.
+SDCPP_TAG = "master-889-c678dfe"
+_SDCPP_BASE = f"https://github.com/leejet/stable-diffusion.cpp/releases/download/{SDCPP_TAG}/"
+if sys.platform == "win32":
+    SDCPP_ZIP = "sd-master-c678dfe-bin-win-vulkan-x64.zip"
+elif sys.platform == "darwin":
+    SDCPP_ZIP = "sd-master-c678dfe-bin-Darwin-macOS-26.6.2-arm64.zip"
+else:
+    SDCPP_ZIP = "sd-master-c678dfe-bin-Linux-Ubuntu-24.04-x86_64-vulkan.zip"
+
+MODELS_DIR = DATA_DIR / "models"
+SDCPP_DIR = MODELS_DIR / "sdcpp" / SDCPP_TAG
+FLUX_DIR = MODELS_DIR / "flux2-klein-4b"
+_HF = "https://huggingface.co/"
+
+ZIMG_DIR = MODELS_DIR / "z-image-turbo"
+FLUX9_DIR = MODELS_DIR / "flux2-klein-9b"
+
+# Einzelne Dateien. Mehrere Modelle teilen sich Bausteine (VAE, Text-Encoder).
+GEN_PARTS = {
+    "engine": {"label": "Bild-Engine (stable-diffusion.cpp)", "url": _SDCPP_BASE + SDCPP_ZIP,
+               "path": SDCPP_DIR / SDCPP_ZIP, "size": 32 * 2**20},
+    "vae":    {"label": "FLUX.2 VAE", "size": 336 * 2**20, "path": FLUX_DIR / "flux2-vae.safetensors",
+               "url": _HF + "Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors"},
+    "llm":    {"label": "Text-Encoder Qwen3 4B", "size": 2500 * 2**20, "path": FLUX_DIR / "Qwen3-4B-Q4_K_M.gguf",
+               "url": _HF + "unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf"},
+    "q4":     {"label": "FLUX.2 klein 4B (Q4)", "size": 2460 * 2**20, "path": FLUX_DIR / "flux-2-klein-4b-Q4_0.gguf",
+               "url": _HF + "leejet/FLUX.2-klein-4B-GGUF/resolve/main/flux-2-klein-4b-Q4_0.gguf"},
+    "q8":     {"label": "FLUX.2 klein 4B (Q8)", "size": 4300 * 2**20,
+               "path": FLUX_DIR / "flux-2-klein-4b-Q8_0.gguf",
+               "url": _HF + "leejet/FLUX.2-klein-4B-GGUF/resolve/main/flux-2-klein-4b-Q8_0.gguf"},
+    "zimg":   {"label": "Z-Image Turbo (Q8)", "size": 6580 * 2**20, "path": ZIMG_DIR / "z_image_turbo-Q8_0.gguf",
+               "url": _HF + "leejet/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q8_0.gguf"},
+    "zvae":   {"label": "Z-Image VAE", "size": 320 * 2**20, "path": ZIMG_DIR / "ae.safetensors",
+               "url": _HF + "Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors"},
+    "k9":     {"label": "FLUX.2 klein 9B (Q6)", "size": 7870 * 2**20, "path": FLUX9_DIR / "flux-2-klein-9b-Q6_K.gguf",
+               "url": _HF + "unsloth/FLUX.2-klein-9B-GGUF/resolve/main/flux-2-klein-9b-Q6_K.gguf"},
+    "llm8":   {"label": "Text-Encoder Qwen3 8B", "size": 5030 * 2**20, "path": FLUX9_DIR / "Qwen3-8B-Q4_K_M.gguf",
+               "url": _HF + "unsloth/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf"},
+}
+
+# Waehlbare Modelle (Reihenfolge = Reihenfolge in der Oberflaeche).
+# ref: kann ein Vorlagenbild umbauen. vram: grobe Empfehlung fuer die Anzeige.
+GEN_MODELS = {
+    "klein4":  {"name": "FLUX.2 klein 4B", "tag": "Schnell", "vram": "ab 6 GB", "ref": True,
+                "hint": "Leicht und flott. Läuft auf fast jeder Grafikkarte.",
+                "parts": {"diffusion": "q4", "vae": "vae", "llm": "llm"}, "steps": 4, "cfg": 1.0},
+    "klein4q8": {"name": "FLUX.2 klein 4B fein", "tag": "Schnell+", "vram": "ab 8 GB", "ref": True,
+                 "hint": "Gleiches Modell, weniger komprimiert: sauberere Details.",
+                 "parts": {"diffusion": "q8", "vae": "vae", "llm": "llm"}, "steps": 4, "cfg": 1.0},
+    "zimage":  {"name": "Z-Image Turbo", "tag": "Foto", "vram": "ab 8 GB", "ref": False,
+                "hint": "Sehr gute Fotorealistik, stark bei Menschen, Haut und Licht.",
+                "parts": {"diffusion": "zimg", "vae": "zvae", "llm": "llm"}, "steps": 8, "cfg": 1.0},
+    "klein9":  {"name": "FLUX.2 klein 9B", "tag": "Stark", "vram": "ab 12 GB", "ref": True,
+                "hint": "Großer Bruder von klein 4B: mehr Details, folgt der Beschreibung genauer.",
+                "parts": {"diffusion": "k9", "vae": "vae", "llm": "llm8"}, "steps": 4, "cfg": 1.0},
+}
+CUSTOM_CFG = DATA_DIR / "gen_custom.json"
+CUSTOM_EXTS = {".safetensors", ".gguf", ".ckpt"}
+
+
+def _custom_path():
+    """Pfad zum selbst gewaehlten Modell (z. B. ein SDXL-Checkpoint) oder None."""
+    try:
+        p = Path(json.loads(CUSTOM_CFG.read_text(encoding="utf-8"))["path"])
+    except (OSError, ValueError, KeyError):
+        return None
+    return p if p.is_file() and p.suffix.lower() in CUSTOM_EXTS else None
+
+
+GEN_SIZES = {"1:1": (1024, 1024), "4:3": (1152, 864), "3:4": (864, 1152),
+             "16:9": (1280, 720), "9:16": (720, 1280)}
+
+_gen_lock = threading.Lock()
+_gen_setup = {"phase": "idle", "progress": 0, "label": "", "error": ""}
+_gen_jobs = {}
+_gen_queue = queue.Queue()
+_gen_worker_started = False
+
+
+def _http_open(url, start=0, timeout=30):
+    headers = {"User-Agent": f"AviensToolbox/{APP_VERSION}"}
+    if start:
+        headers["Range"] = f"bytes={start}-"
+    return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout)
+
+
+def _download(url, dest, on_progress=None):
+    """Laedt nach dest (mit .part-Datei, setzt abgebrochene Downloads fort)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    have = part.stat().st_size if part.exists() else 0
+    try:
+        resp = _http_open(url, have)
+    except urllib.error.HTTPError as e:
+        if e.code != 416:
+            raise
+        part.unlink(missing_ok=True)
+        have, resp = 0, _http_open(url)
+    with resp:
+        if have and resp.status != 206:      # Server kann kein Range -> von vorn
+            have = 0
+        total = have + int(resp.headers.get("Content-Length") or 0)
+        with open(part, "ab" if have else "wb") as fh:
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                fh.write(chunk)
+                have += len(chunk)
+                if on_progress:
+                    on_progress(have, total)
+    if total and have < total:
+        raise RuntimeError("Download unvollstaendig - bitte erneut versuchen.")
+    part.replace(dest)
+
+
+def _sd_exe():
+    """Pfad zum sd-cli-Programm (None, wenn noch nicht installiert)."""
+    if not SDCPP_DIR.exists():
+        return None
+    names = ("sd-cli.exe", "sd.exe") if sys.platform == "win32" else ("sd-cli", "sd")
+    for n in names:
+        hits = sorted(SDCPP_DIR.rglob(n))
+        if hits:
+            return hits[0]
+    return None
+
+
+def _gen_missing(model):
+    """Bausteine, die fuer ein Modell noch fehlen (eigenes Modell: nur die Engine)."""
+    need = ["engine"]
+    if model in GEN_MODELS:
+        need += GEN_MODELS[model]["parts"].values()
+    out = []
+    for key in need:
+        ok = _sd_exe() is not None if key == "engine" else GEN_PARTS[key]["path"].exists()
+        if not ok:
+            out.append(key)
+    return out
+
+
+def _gen_setup_run(model):
+    try:
+        todo = _gen_missing(model)
+        grand = sum(GEN_PARTS[k]["size"] for k in todo) or 1
+        done_before = 0
+        for key in todo:
+            part = GEN_PARTS[key]
+
+            def prog(have, total, base=done_before, label=part["label"]):
+                with _gen_lock:
+                    _gen_setup.update(label=label, progress=min(99, round((base + have) * 100 / grand)))
+
+            prog(0, 0)
+            _download(part["url"], part["path"], prog)
+            if key == "engine":
+                with zipfile.ZipFile(part["path"]) as zf:
+                    zf.extractall(SDCPP_DIR)
+                part["path"].unlink(missing_ok=True)
+                exe = _sd_exe()
+                if exe is None:
+                    raise RuntimeError("sd-cli wurde im Archiv nicht gefunden.")
+                if sys.platform != "win32":
+                    exe.chmod(0o755)
+            done_before += part["size"]
+        with _gen_lock:
+            _gen_setup.update(phase="idle", progress=100, label="", error="")
+    except Exception as e:
+        with _gen_lock:
+            _gen_setup.update(phase="error", error=f"Einrichtung fehlgeschlagen: {e}")
+
+
+def _gen_model_key(value):
+    value = str(value or "")
+    return value if value in GEN_MODELS or value == "custom" else "klein4"
+
+
+@app.route("/api/gen/status")
+def gen_status():
+    model = _gen_model_key(request.args.get("model"))
+    missing = _gen_missing(model)
+    with _gen_lock:
+        setup = dict(_gen_setup)
+    custom = _custom_path()
+    models = [{"key": k, "name": m["name"], "tag": m["tag"], "vram": m["vram"], "hint": m["hint"],
+               "ref": m["ref"], "installed": not _gen_missing(k),
+               "bytes": sum(GEN_PARTS[p]["size"] for p in _gen_missing(k))}
+              for k, m in GEN_MODELS.items()]
+    return jsonify(ready=not missing and (model != "custom" or custom is not None),
+                   setup=setup, models=models, custom=str(custom) if custom else "",
+                   missing=[{"key": k, "label": GEN_PARTS[k]["label"], "size": GEN_PARTS[k]["size"]}
+                            for k in missing],
+                   missing_bytes=sum(GEN_PARTS[k]["size"] for k in missing))
+
+
+@app.route("/api/gen/setup", methods=["POST"])
+def gen_setup():
+    data = request.get_json(silent=True) or {}
+    model = _gen_model_key(data.get("model"))
+    with _gen_lock:
+        if _gen_setup["phase"] == "running":
+            return jsonify(ok=True)
+        _gen_setup.update(phase="running", progress=0, label="Starte ...", error="")
+    threading.Thread(target=_gen_setup_run, args=(model,), daemon=True).start()
+    return jsonify(ok=True)
+
+
+@app.route("/api/gen/custom", methods=["POST"])
+def gen_custom():
+    """Merkt sich den Pfad zu einer eigenen Modell-Datei (leer = vergessen)."""
+    raw = str((request.get_json(silent=True) or {}).get("path") or "").strip().strip('"')
+    if not raw:
+        CUSTOM_CFG.unlink(missing_ok=True)
+        return jsonify(ok=True, path="")
+    p = Path(raw)
+    if not p.is_file():
+        return jsonify(error="Datei nicht gefunden."), 400
+    if p.suffix.lower() not in CUSTOM_EXTS:
+        return jsonify(error="Bitte eine .safetensors-, .gguf- oder .ckpt-Datei angeben."), 400
+    CUSTOM_CFG.write_text(json.dumps({"path": str(p)}), encoding="utf-8")
+    return jsonify(ok=True, path=str(p))
+
+
+_GEN_STEP_RE = re.compile(r"(\d+)\s*/\s*(\d+)\s*-\s*[\d.]+\s*(?:s/it|it/s)")
+
+
+def _gen_run(jid):
+    job = _gen_jobs[jid]
+    exe = _sd_exe()
+    w, h = GEN_SIZES.get(job["ratio"], GEN_SIZES["1:1"])
+    stem = re.sub(r"[^\w\- ]+", "", job["prompt"])[:40].strip() or "bild"
+    outs = []
+    for n in range(job["count"]):
+        seed = job["seed"] + n if job["seed"] >= 0 else random.randint(0, 2**31 - 1)
+        out = unique_path(OUT_GEN, f"{stem}_{seed}.png")
+        if job["model"] == "custom":
+            # Kompletter Checkpoint (SD 1.5 / SDXL ...): Engine erkennt die Bauart selbst.
+            weights = ["-m", job["custom"]]
+            if job.get("negative"):
+                weights += ["-n", job["negative"]]
+        else:
+            parts = GEN_MODELS[job["model"]]["parts"]
+            weights = ["--diffusion-model", str(GEN_PARTS[parts["diffusion"]]["path"]),
+                       "--vae", str(GEN_PARTS[parts["vae"]]["path"]),
+                       "--llm", str(GEN_PARTS[parts["llm"]]["path"])]
+        args = [str(exe), *weights,
+                "-p", job["prompt"], "--cfg-scale", str(job["cfg"]), "--steps", str(job["steps"]),
+                "-W", str(w), "-H", str(h), "-s", str(seed), "-o", str(out),
+                "--diffusion-fa", "--offload-to-cpu"]
+        if job.get("ref"):
+            args += ["-r", job["ref"]]
+        proc = subprocess.Popen(
+            args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=str(exe.parent),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        job["proc"] = proc
+        tail, buf = [], b""
+        while True:
+            chunk = proc.stdout.read(256)
+            if not chunk:
+                break
+            buf += chunk
+            *lines, buf = re.split(rb"[\r\n]", buf)
+            for raw in lines:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line:
+                    continue
+                m = _GEN_STEP_RE.search(line)
+                if m and int(m.group(2)) == job["steps"]:
+                    # Sampling ist nur ein Teil der Zeit: danach folgt das Dekodieren (VAE).
+                    step, steps = int(m.group(1)), int(m.group(2))
+                    frac = (n + 0.6 * step / steps) / job["count"]
+                    job.update(phase="dekodieren" if step == steps else "bild",
+                               progress=min(99, round(frac * 100)))
+                elif not m:
+                    tail = (tail + [line])[-8:]
+        proc.wait()
+        if job.get("cancel"):
+            raise RuntimeError("Abgebrochen.")
+        if proc.returncode != 0 or not out.exists():
+            raise RuntimeError("Generierung fehlgeschlagen: " + " | ".join(tail[-3:]))
+        outs.append({"file": out.name, "download": dl_url(out),
+                     "view": "/view/" + out.relative_to(OUTPUT).as_posix(), "seed": seed})
+        job["files"] = list(outs)
+
+
+def _gen_worker():
+    while True:
+        jid = _gen_queue.get()
+        job = _gen_jobs[jid]
+        try:
+            if job.get("cancel"):
+                raise RuntimeError("Abgebrochen.")
+            job.update(phase="modell", progress=0)
+            _gen_run(jid)
+            job.update(phase="fertig", progress=100)
+        except Exception as e:
+            job.update(phase="fehler", error=str(e))
+        finally:
+            job.pop("proc", None)
+            if job.get("ref"):
+                try:
+                    os.remove(job["ref"])
+                except OSError:
+                    pass
+
+
+@app.route("/api/gen", methods=["POST"])
+def gen_start():
+    global _gen_worker_started
+    prompt = (request.form.get("prompt") or "").strip()
+    model = _gen_model_key(request.form.get("model"))
+    custom = _custom_path()
+    if not prompt:
+        return jsonify(error="Bitte beschreibe, was du sehen willst."), 400
+    if model == "custom" and custom is None:
+        return jsonify(error="Bitte zuerst eine eigene Modell-Datei angeben."), 400
+    if _gen_missing(model):
+        return jsonify(error="Das Modell ist noch nicht eingerichtet."), 400
+    preset = GEN_MODELS.get(model, {"steps": 24, "cfg": 6.0, "ref": False})
+    try:
+        seed = int(request.form.get("seed") or -1)
+        count = min(4, max(1, int(request.form.get("count") or 1)))
+        steps, cfg = preset["steps"], preset["cfg"]
+        if model == "custom":                  # nur hier sind Schritte/CFG frei waehlbar
+            steps = min(60, max(1, int(request.form.get("steps") or steps)))
+            cfg = min(20.0, max(1.0, float(request.form.get("cfg") or cfg)))
+    except ValueError:
+        return jsonify(error="Seed, Anzahl, Schritte und CFG muessen Zahlen sein."), 400
+
+    ref = None
+    f = request.files.get("ref") if preset["ref"] else None
+    if f and f.filename:
+        ext = os.path.splitext(f.filename)[1].lower().lstrip(".")
+        if ext not in IMAGE_EXTS:
+            return jsonify(error=f".{ext} ist kein Bild."), 400
+        ref_path = UPLOADS / f"{uuid.uuid4().hex[:8]}_ref.png"
+        _fit(Image.open(f.stream).convert("RGB"), 1536).save(ref_path, "PNG")
+        ref = str(ref_path)
+
+    jid = uuid.uuid4().hex[:12]
+    _gen_jobs[jid] = {"prompt": prompt, "model": model, "custom": str(custom or ""),
+                      "negative": (request.form.get("negative") or "").strip(),
+                      "seed": seed, "count": count, "steps": steps, "cfg": cfg, "ratio": request.form.get("ratio") or "1:1", "ref": ref,
+                      "phase": "wartet", "progress": 0, "files": [], "error": ""}
+    if not _gen_worker_started:
+        _gen_worker_started = True
+        threading.Thread(target=_gen_worker, daemon=True).start()
+    _gen_queue.put(jid)
+    return jsonify(id=jid)
+
+
+@app.route("/api/gen/job/<jid>")
+def gen_job(jid):
+    job = _gen_jobs.get(jid)
+    if not job:
+        abort(404)
+    return jsonify({k: job.get(k) for k in ("phase", "progress", "files", "error")})
+
+
+@app.route("/api/gen/cancel/<jid>", methods=["POST"])
+def gen_cancel(jid):
+    job = _gen_jobs.get(jid)
+    if not job:
+        abort(404)
+    job["cancel"] = True
+    proc = job.get("proc")
+    if proc and proc.poll() is None:
+        proc.kill()
+    return jsonify(ok=True)
+
+
+# ---------------------------------------------------------------- Auto-Updater
+# Auf dem Webspace liegt ein Ordner mit
+#   manifest.json   {"version", "min_runtime", "notes", "installer_url", "files": {pfad: {sha256, size}}}
+#   files/<sha256>  die Dateien selbst, nach Inhalt benannt
+# (erzeugt von publish_update.py). Geladen wird nur, was sich geaendert hat. Das
+# Update landet in <Datenordner>/update/v<Version>/ und wird beim naechsten Start
+# von bootstrap.py benutzt. Braucht eine Version neue Python-Pakete
+# (min_runtime > eingebaute Runtime), wird stattdessen der Installer angeboten.
+_upd_lock = threading.Lock()
+_upd_state = {"phase": "idle", "progress": 0, "error": "", "version": ""}
+_upd_manifest = None
+_sha_cache = {}
+
+
+def update_url():
+    """Basis-URL des Update-Kanals ('' = Updater aus)."""
+    if os.environ.get("AVIENS_UPDATE_URL"):
+        return os.environ["AVIENS_UPDATE_URL"].rstrip("/") + "/"
+    for f in (DATA_DIR / "update_channel.json", Path(resource_path("update_channel.json"))):
+        try:
+            url = str(json.loads(f.read_text(encoding="utf-8")).get("url") or "").strip()
+        except (OSError, ValueError):
+            continue
+        if url:
+            return url.rstrip("/") + "/"
+    return ""
+
+
+def _sha256(path):
+    key = (str(path), path.stat().st_mtime_ns, path.stat().st_size)
+    if key not in _sha_cache:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        _sha_cache[key] = h.hexdigest()
+    return _sha_cache[key]
+
+
+def _safe_rel(rel):
+    p = Path(rel)
+    return not (p.is_absolute() or ".." in p.parts or ":" in rel or rel.startswith(("/", "\\")))
+
+
+def _fetch_manifest():
+    base = update_url()
+    if not base:
+        raise RuntimeError("Kein Update-Kanal eingerichtet.")
+    if not base.startswith("https://") and not base.startswith("http://127.0.0.1"):
+        raise RuntimeError("Der Update-Kanal muss https sein.")
+    with _http_open(base + "manifest.json?t=" + str(int(time.time())), timeout=12) as resp:
+        man = json.loads(resp.read().decode("utf-8"))
+    if not isinstance(man.get("files"), dict) or not man.get("version"):
+        raise RuntimeError("manifest.json ist unvollstaendig.")
+    return man
+
+
+def _upd_info(man):
+    newer = bootstrap.parse_version(man["version"]) > bootstrap.parse_version(APP_VERSION)
+    needs_installer = int(man.get("min_runtime") or 0) > bootstrap.RUNTIME
+    return {"current": APP_VERSION, "latest": str(man["version"]), "available": newer,
+            "ytdlp": YTDLP_VERSION, "latest_ytdlp": str(man.get("ytdlp") or ""),
+            "notes": str(man.get("notes") or ""), "needs_installer": newer and needs_installer,
+            "installer_url": str(man.get("installer_url") or "")}
+
+
+@app.route("/api/update/check")
+def update_check():
+    global _upd_manifest
+    if not update_url():
+        return jsonify(current=APP_VERSION, ytdlp=YTDLP_VERSION, available=False, configured=False)
+    try:
+        _upd_manifest = _fetch_manifest()
+    except Exception as e:
+        return jsonify(current=APP_VERSION, ytdlp=YTDLP_VERSION, available=False,
+                       configured=True, error=str(e))
+    return jsonify(configured=True, **_upd_info(_upd_manifest))
+
+
+def _upd_run(man):
+    try:
+        base = update_url()
+        version = re.sub(r"[^\w.\-]", "_", str(man["version"]))
+        root = bootstrap.update_root()
+        target = root / f"v{version}"
+        shutil.rmtree(target, ignore_errors=True)
+        target.mkdir(parents=True)
+        bundled = bootstrap.bundled_dir()
+
+        jobs, total = [], 0
+        for rel, meta in man["files"].items():
+            if not _safe_rel(rel) or not re.fullmatch(r"[0-9a-f]{64}", str(meta.get("sha256"))):
+                raise RuntimeError(f"Ungueltiger Eintrag im Manifest: {rel}")
+            local = None
+            for src_root in (BASE, bundled):
+                cand = src_root / rel
+                if cand.is_file() and _sha256(cand) == meta["sha256"]:
+                    local = cand
+                    break
+            # Unveraenderte eingebaute static-Dateien muessen nicht kopiert werden:
+            # /static faellt automatisch auf die eingebaute Fassung zurueck.
+            if local and rel.startswith("static/") and local == bundled / rel:
+                continue
+            jobs.append((rel, meta, local))
+            if not local:
+                total += int(meta.get("size") or 0)
+
+        got = 0
+        for rel, meta, local in jobs:
+            dest = target / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if local:
+                shutil.copy2(local, dest)
+                continue
+
+            def prog(have, _t, base_got=got):
+                with _upd_lock:
+                    _upd_state["progress"] = min(99, round((base_got + have) * 100 / max(1, total)))
+
+            _download(base + "files/" + meta["sha256"], dest, prog)
+            if _sha256(dest) != meta["sha256"]:
+                raise RuntimeError(f"Pruefsumme stimmt nicht: {rel}")
+            got += int(meta.get("size") or 0)
+
+        if not (target / "app.py").exists() or not (target / "version.json").exists():
+            raise RuntimeError("Update enthaelt kein app.py / version.json.")
+        tmp = root / "current.json.tmp"
+        tmp.write_text(json.dumps({"dir": target.name, "version": man["version"]}), encoding="utf-8")
+        tmp.replace(root / "current.json")
+        with _upd_lock:
+            _upd_state.update(phase="ready", progress=100, version=str(man["version"]))
+    except Exception as e:
+        with _upd_lock:
+            _upd_state.update(phase="error", error=f"Update fehlgeschlagen: {e}")
+
+
+@app.route("/api/update/apply", methods=["POST"])
+def update_apply():
+    man = _upd_manifest
+    if not man or not _upd_info(man)["available"]:
+        return jsonify(error="Kein Update verfuegbar."), 400
+    if _upd_info(man)["needs_installer"]:
+        return jsonify(error="Diese Version braucht den neuen Installer."), 400
+    with _upd_lock:
+        if _upd_state["phase"] != "running":
+            _upd_state.update(phase="running", progress=0, error="")
+            threading.Thread(target=_upd_run, args=(man,), daemon=True).start()
+    return jsonify(ok=True)
+
+
+@app.route("/api/update/status")
+def update_status():
+    with _upd_lock:
+        return jsonify(**_upd_state)
+
+
+@app.route("/api/update/restart", methods=["POST"])
+def update_restart():
+    """Startet das Programm neu, damit die neue Version geladen wird."""
+    frozen = getattr(sys, "frozen", False)
+    if not frozen and "desktop" not in os.path.basename(sys.argv[0]).lower():
+        return jsonify(ok=False, error="Im Entwicklermodus bitte von Hand neu starten."), 400
+    cmd = [sys.executable] if frozen else [sys.executable, *sys.argv]
+
+    def later():
+        time.sleep(0.6)
+        subprocess.Popen(cmd, close_fds=True)
+        os._exit(0)
+
+    threading.Thread(target=later, daemon=True).start()
+    return jsonify(ok=True)
+
+
+@app.route("/api/open-url", methods=["POST"])
+def open_url():
+    """Oeffnet einen https-Link (Installer-Download) im Standardbrowser."""
+    url = str((request.get_json(silent=True) or {}).get("url") or "")
+    if not url.startswith("https://"):
+        return jsonify(ok=False), 400
+    webbrowser.open(url)
+    return jsonify(ok=True)
+
+
+@app.route("/view/<path:fname>")
+def view(fname):
+    """Wie /download, aber zur Anzeige im Fenster (Bild-Vorschau)."""
+    target = (OUTPUT / fname).resolve()
+    if OUTPUT.resolve() not in target.parents or not target.is_file():
+        abort(404)
+    return send_file(target, conditional=True)
+
+
+@app.route("/bg.mp4")
+def bg_video():
+    """Hintergrund-Video (Loop). 'bg.mp4' neben der .exe ueberschreibt das gebuendelte."""
+    user = DATA_DIR / "bg.mp4"
+    f = user if user.exists() else Path(resource_path("static/bg.mp4"))
+    if not f.exists():
+        abort(404)
+    return send_file(str(f))
+
+
+@app.route("/download/<path:fname>")
+def download(fname):
+    target = (OUTPUT / fname).resolve()
+    if OUTPUT.resolve() not in target.parents or not target.exists():
+        abort(404)
+    nice = re.sub(r"^[0-9a-f]{8}_", "", target.name)  # uid-Praefix alter Dateien entfernen
+    return send_file(target, as_attachment=True, download_name=nice)
+
+
+# ---------------------------------------------------------------- start
+def free_port(preferred=5000):
+    for port in range(preferred, preferred + 20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(("127.0.0.1", port)) != 0:
+                return port
+    return preferred
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT") or 0) or free_port(5000)
+    url = f"http://127.0.0.1:{port}"
+    if "--no-browser" not in sys.argv:
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    print(f"\n  Aviens Toolbox laeuft auf  {url}\n  (zum Beenden dieses Fenster schliessen)\n")
+    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
