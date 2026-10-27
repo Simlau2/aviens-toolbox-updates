@@ -367,14 +367,30 @@
 
   /* ---------- Popup-Gadget (DVD-Saver) ---------- */
   #popup-layer{position:fixed;inset:0;pointer-events:none;z-index:60;overflow:hidden}
-  .popup{position:absolute;pointer-events:auto;cursor:pointer;will-change:transform;
-    border-radius:16px;overflow:hidden;background:var(--glass-strong);
-    border:1px solid var(--glass-line);box-shadow:0 10px 34px rgba(0,30,60,.4);
-    animation:pop-in .28s cubic-bezier(.2,1.4,.4,1) both;transition:transform .12s}
+  /* Aussen: Position (per JS translate). Innen (.pp): Rahmen + Animationen,
+     damit pop-in/hover/pop-out die Position nicht ueberschreiben. */
+  .popup{position:absolute;left:0;top:0;pointer-events:auto;cursor:pointer;will-change:transform;--pc:#2fb4ff}
+  .popup .pp{width:100%;height:100%;border-radius:16px;overflow:hidden;background:var(--glass-strong);
+    border:3px solid var(--pc);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.6),0 0 18px var(--pc),0 10px 30px rgba(0,30,60,.4);
+    animation:pop-in .28s cubic-bezier(.2,1.4,.4,1) both;
+    transition:border-color .2s,box-shadow .2s,transform .12s}
   .popup img{display:block;width:100%;height:100%;object-fit:cover}
-  .popup:hover{transform:scale(1.03)}
-  .popup.bye{animation:pop-out .24s ease-in forwards}
+  .popup:hover .pp{transform:scale(1.03)}
+  .popup.boing .pp{animation:pp-boing .26s ease-out}
+  .popup.bye .pp{animation:pop-out .24s ease-in forwards}
   @keyframes pop-out{to{opacity:0;transform:scale(.3)}}
+  @keyframes pp-boing{40%{transform:scale(.93)}100%{transform:scale(1)}}
+  /* Treffer genau in die Ecke: Lichtring + Schriftzug */
+  .cburst{position:absolute;width:0;height:0;pointer-events:none}
+  .cburst::before{content:"";position:absolute;left:-90px;top:-90px;width:180px;height:180px;border-radius:50%;
+    background:radial-gradient(circle,#fff 0,var(--pc) 35%,transparent 70%);
+    animation:cb-ring .9s ease-out forwards}
+  .cburst b{position:absolute;white-space:nowrap;font-size:22px;font-weight:800;letter-spacing:.06em;color:#fff;
+    text-shadow:0 0 12px var(--pc),0 2px 4px rgba(0,40,90,.6);animation:cb-text 1.4s ease-out forwards}
+  @keyframes cb-ring{from{transform:scale(.2);opacity:1}to{transform:scale(2.4);opacity:0}}
+  @keyframes cb-text{0%{opacity:0;transform:scale(.5)}15%{opacity:1;transform:scale(1.15)}
+    30%{transform:scale(1)}75%{opacity:1}100%{opacity:0;transform:translateY(-14px)}}
 
   /* ---------- Fussleiste ---------- */
   .footer{display:flex;align-items:center;gap:8px;padding:4px 2px 0}
@@ -1779,18 +1795,56 @@ renderContrast();
     o.connect(g).connect(ac.destination); o.start(t); o.stop(t+0.24);
   }
 
+  // Ecken-Treffer: kleiner Dreiklang aufwaerts
+  function cornerSound(){
+    const ac=audioCtx(); if(!ac) return;
+    [660,880,1320].forEach((f,i)=>{
+      const t=ac.currentTime+i*0.09;
+      const o=ac.createOscillator(), g=ac.createGain();
+      o.type='triangle'; o.frequency.setValueAtTime(f,t);
+      g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.25,t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+0.35);
+      o.connect(g).connect(ac.destination); o.start(t); o.stop(t+0.36);
+    });
+  }
+
   let imgs=[];
   const live=[];
   const MAX_LIVE=5;
+  const START_DELAY=15000;           // erstes Meme erst nach 15 s, Musik laeuft sofort
+  const SPEED=110;                   // px/s pro Achse -> schraeg im 45-Grad-Winkel wie das DVD-Logo
+  const CORNER_TOL=4;                // so knapp an der zweiten Wand zaehlt als Ecke
+  const COLORS=['#2fb4ff','#5bd65b','#ffcc33','#ff6fa8','#a77bff','#ff8a3d','#35e0c8'];
   let popupTimer=null, rafId=null;
 
   fetch('/api/popups').then(r=>r.json()).then(d=>{ imgs=d.images||[]; }).catch(()=>{});
+
+  function recolor(p){
+    p.ci = (p.ci + 1 + Math.floor(Math.random()*(COLORS.length-1))) % COLORS.length;
+    p.el.style.setProperty('--pc', COLORS[p.ci]);
+    p.el.classList.remove('boing'); void p.el.offsetWidth; p.el.classList.add('boing');
+  }
+
+  function cornerBurst(p, cx, cy){
+    const b=document.createElement('div');
+    b.className='cburst';
+    b.style.setProperty('--pc', COLORS[p.ci]);
+    b.style.left=cx+'px'; b.style.top=cy+'px';
+    const t=document.createElement('b'); t.textContent='ECKE!';
+    // Schriftzug nach innen versetzt, damit er nicht aus dem Fenster ragt
+    t.style[cx>0?'right':'left']='14px'; t.style[cy>0?'bottom':'top']='10px';
+    b.appendChild(t); layer.appendChild(b);
+    cornerSound();
+    setTimeout(()=>b.remove(), 1500);
+  }
 
   function spawnPopup(){
     if(!popupsOn || !imgs.length || live.length>=MAX_LIVE) return;
     const url = imgs[Math.floor(Math.random()*imgs.length)];
     const el = document.createElement('div');
     el.className='popup';
+    const pp = document.createElement('div');
+    pp.className='pp';
     const im = new Image();
     im.onload=()=>{
       if(!popupsOn){ el.remove(); return; }
@@ -1799,15 +1853,16 @@ renderContrast();
       const h = w/ar;
       const x = Math.random()*Math.max(10,(innerWidth - w));
       const y = Math.random()*Math.max(10,(innerHeight - h));
-      const sp = 0.6 + Math.random()*0.9;
-      const ang = Math.random()*Math.PI*2;
-      const p = {el, x, y, vx:Math.cos(ang)*sp*60, vy:Math.sin(ang)*sp*60, w, h};
+      const ci = Math.floor(Math.random()*COLORS.length);
+      const p = {el, x, y, w, h, ci,
+        vx:(Math.random()<.5?-1:1)*SPEED, vy:(Math.random()<.5?-1:1)*SPEED};
+      el.style.setProperty('--pc', COLORS[ci]);
       el.style.width=w+'px'; el.style.height=h+'px';
       el.style.transform=`translate(${x}px,${y}px)`;
       el.onclick=()=>dismiss(p);
       live.push(p);
     };
-    im.src=url; el.appendChild(im); layer.appendChild(el);
+    im.src=url; pp.appendChild(im); el.appendChild(pp); layer.appendChild(el);
   }
 
   function dismiss(p){
@@ -1820,10 +1875,21 @@ renderContrast();
   let lastT=performance.now();
   function tick(now){
     const dt=Math.min(0.05,(now-lastT)/1000); lastT=now;
+    const W=innerWidth, H=innerHeight;
     for(const p of live){
       p.x+=p.vx*dt; p.y+=p.vy*dt;
-      if(p.x<=0){p.x=0;p.vx=Math.abs(p.vx);} else if(p.x+p.w>=innerWidth){p.x=innerWidth-p.w;p.vx=-Math.abs(p.vx);}
-      if(p.y<=0){p.y=0;p.vy=Math.abs(p.vy);} else if(p.y+p.h>=innerHeight){p.y=innerHeight-p.h;p.vy=-Math.abs(p.vy);}
+      const maxX=Math.max(0,W-p.w), maxY=Math.max(0,H-p.h);
+      let hitX=false, hitY=false;
+      if(p.x<=0){p.x=0;p.vx=Math.abs(p.vx);hitX=true;} else if(p.x>=maxX){p.x=maxX;p.vx=-Math.abs(p.vx);hitX=true;}
+      if(p.y<=0){p.y=0;p.vy=Math.abs(p.vy);hitY=true;} else if(p.y>=maxY){p.y=maxY;p.vy=-Math.abs(p.vy);hitY=true;}
+      // Knapp daneben zaehlt auch: in die Ecke einrasten (sonst ist ein Treffer fast unmoeglich)
+      if(hitX && !hitY && (p.y<=CORNER_TOL || p.y>=maxY-CORNER_TOL)){
+        const top=p.y<=CORNER_TOL; p.y=top?0:maxY; p.vy=top?Math.abs(p.vy):-Math.abs(p.vy); hitY=true;
+      } else if(hitY && !hitX && (p.x<=CORNER_TOL || p.x>=maxX-CORNER_TOL)){
+        const left=p.x<=CORNER_TOL; p.x=left?0:maxX; p.vx=left?Math.abs(p.vx):-Math.abs(p.vx); hitX=true;
+      }
+      if(hitX || hitY) recolor(p);
+      if(hitX && hitY) cornerBurst(p, p.x>0?W:0, p.y>0?H:0);
       p.el.style.transform=`translate(${p.x}px,${p.y}px)`;
     }
     rafId=requestAnimationFrame(tick);
@@ -1835,9 +1901,10 @@ renderContrast();
     popupTimer=setTimeout(()=>{ spawnPopup(); scheduleNext(); }, wait);
   }
 
-  function startPopups(){
+  function startPopups(first){
     if(!rafId){ lastT=performance.now(); rafId=requestAnimationFrame(tick); }
-    scheduleNext(); setTimeout(spawnPopup, 2500);
+    clearTimeout(popupTimer);
+    popupTimer=setTimeout(()=>{ spawnPopup(); scheduleNext(); }, first);
   }
   function stopPopups(){
     clearTimeout(popupTimer);
@@ -1852,10 +1919,10 @@ renderContrast();
   }
   btnPopups.onclick = ()=>{
     popupsOn=!popupsOn; LS.setItem('av_popups', popupsOn?'on':'off'); syncPopupBtn();
-    if(popupsOn) startPopups(); else stopPopups();
+    if(popupsOn) startPopups(1500); else stopPopups();
   };
   syncPopupBtn();
-  if(popupsOn) startPopups();
+  if(popupsOn) startPopups(START_DELAY);
 })();
 
 /* ===================== Player + Playlist ===================== */
@@ -1863,7 +1930,7 @@ renderContrast();
   const LS = window.localStorage;
   const bgm = $('#bgm'), seek = $('#pl-seek'), vol = $('#pl-vol');
   let tracks = [], order = [], pos = 0;
-  let wantPlay = LS.getItem('av_music') === 'on';
+  let wantPlay = LS.getItem('av_music') !== 'off';   // Musik laeuft ab Start, ausser bewusst pausiert
   let shuffle = LS.getItem('av_shuffle') !== 'off';
   let lastVol = 30;
 

@@ -1,16 +1,16 @@
 {
- "version": "2.1.1",
+ "version": "2.1.2",
  "min_runtime": 2,
- "notes": "Updates kommen ab jetzt direkt \u00fcber den Updates-Knopf.",
- "installer_url": "",
+ "notes": "Die Meme-Bilder h\u00fcpfen jetzt wie das alte DVD-Logo: schr\u00e4g, mit Farbwechsel bei jedem Abprallen - und wer eine Ecke trifft, bekommt eine kleine Show. Die ersten Memes kommen nach 15 Sekunden, die Musik l\u00e4uft direkt ab Start.",
+ "installer_url": "https://github.com/Simlau2/aviens-toolbox-updates/releases/latest/download/AviensToolbox-Setup.exe",
  "ytdlp": "2026.10.21",
  "files": {
   "app.py": {
-   "sha256": "6fa804c35b59559e8c94abd3ba5bd6429ab94aebec421421ea745b3fe4d3b77c",
-   "size": 72584
+   "sha256": "90f66744444f8577eebc5ebb6eea8f96da88b9eb7ca0b357988f5177aec26934",
+   "size": 73053
   },
   "version.json": {
-   "sha256": "96ed8e0c980a236b193b169c1edee72c95d03dcfb4005753651815ca6e8dcb0b",
+   "sha256": "c4a8279c261e32fab06820ebe33be5bb477d1224b27ac64f235263ef9865ef67",
    "size": 40
   },
   "update_channel.json": {
@@ -18,8 +18,8 @@
    "size": 82
   },
   "templates/index.html": {
-   "sha256": "d8028bc9abc932a85bad8788d48859649fac90492e025b7fd129df5c19dc98da",
-   "size": 107255
+   "sha256": "43fd9c587394e80470daccd13c0f1b736bb7f151d302e5211b777310a02158c5",
+   "size": 111220
   },
   "static/bg.jpg": {
    "sha256": "7f2f2735f4a223216f4109196ccbb59973287d16a89788049304b7df12c1f340",

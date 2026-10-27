@@ -40,6 +40,13 @@ _YTDLP_ZIP = Path(__file__).resolve().parent / "lib" / "ytdlp.zip"
 if _YTDLP_ZIP.is_file():
     sys.path.insert(0, str(_YTDLP_ZIP))
 
+# Musik soll ab Start laufen. WebView2 (Windows-Fenster) blockt Ton ohne Klick - das
+# hebt diese Variable auf. Sie wird gelesen, wenn desktop.py das Fenster oeffnet, also
+# nach diesem Import; ElasticOverscroll setzt pywebview sonst selbst (Variable ersetzt es).
+if sys.platform == "win32":
+    os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                          "--disable-features=ElasticOverscroll --autoplay-policy=no-user-gesture-required")
+
 from yt_dlp import YoutubeDL
 from yt_dlp.version import __version__ as YTDLP_VERSION
 from yt_dlp.utils import download_range_func
